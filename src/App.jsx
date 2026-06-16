@@ -1,6 +1,12 @@
 import { useState, useMemo, useEffect } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ErrorBar, ResponsiveContainer, ScatterChart, Scatter, Legend, ReferenceLine } from "recharts";
-import { Waves, Target, ClipboardList, BarChart3, Download, Upload, Plus, Trash2, FlaskConical, Sigma, Info, Lightbulb, BookOpen, ChevronDown, HelpCircle, CheckCircle2, User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileJson, LayoutTemplate, FileText, DownloadCloud, ClipboardCheck, Monitor, FunctionSquare, Table2, Pencil, ArrowLeft } from "lucide-react";
+import { Waves, Target, ClipboardList, BarChart3, Download, Upload, Plus, Trash2, FlaskConical, Sigma, Info, Lightbulb, BookOpen, ChevronDown, HelpCircle, CheckCircle2, User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileJson, LayoutTemplate, FileText, DownloadCloud, ClipboardCheck, Monitor, FunctionSquare, Table2, Pencil, ArrowLeft, LogIn, Users, Image as ImageIcon, Paperclip, Share2, Lock, UploadCloud } from "lucide-react";
+import * as cloud from "./cloud";
+
+// Anexos de arquivo (fotos/logs) dependem de um backend de Storage.
+// Mantido desligado enquanto rodamos só em Auth + Firestore (plano grátis, sem cartão).
+// Para ligar: provisione o Storage (Firebase Blaze ou Supabase) e mude para true.
+const ATTACHMENTS_ENABLED = false;
 
 const LS = (() => { const mem = {}; return { get: k => { try { return window.localStorage.getItem(k); } catch { return k in mem ? mem[k] : null; } }, set: (k, v) => { try { window.localStorage.setItem(k, v); } catch { mem[k] = v; } }, del: k => { try { window.localStorage.removeItem(k); } catch { delete mem[k]; } } }; })();
 const readJSON = (k, fb) => { try { const v = LS.get(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
@@ -198,10 +204,16 @@ function Termo({ children, def, ex }) {
 }
 
 export default function App() {
-  const [users, setUsers] = useState(() => readJSON(USERS_KEY, []));
   const [currentUser, setCurrentUser] = useState(null);
-  const [loginName, setLoginName] = useState("");
-  const [saves, setSaves] = useState([]);
+  const [authReady, setAuthReady] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [cloudList, setCloudList] = useState([]);     // tabela compartilhada do time
+  const [currentExp, setCurrentExp] = useState(null); // experimento aberto (null = rascunho novo)
+  const [attachments, setAttachments] = useState([]);
+  const [profilesList, setProfilesList] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [listFilter, setListFilter] = useState("todos"); // todos | meus
   const [showSaves, setShowSaves] = useState(false);
   const [showSaveDlg, setShowSaveDlg] = useState(false);
   const [saveTitle, setSaveTitle] = useState("");
@@ -246,33 +258,97 @@ export default function App() {
   useEffect(() => { const h = (e) => { e.preventDefault(); setDeferred(e); }; window.addEventListener("beforeinstallprompt", h); return () => window.removeEventListener("beforeinstallprompt", h); }, []);
   const installApp = async () => { if (!deferred) return; deferred.prompt(); await deferred.userChoice; setDeferred(null); };
 
-  const login = (name) => {
-    const n = name.trim(); if (!n) return;
-    let u = users.find(x => x.name.toLowerCase() === n.toLowerCase());
-    if (!u) { u = { id: Date.now().toString(36), name: n }; const nu = [...users, u]; setUsers(nu); writeJSON(USERS_KEY, nu); }
-    setCurrentUser(u);
-    const work = readJSON(`hep:work:${u.id}`, null);
-    applyBundle(work || { ...DEF, meta: { ...META_DEF, responsavel: u.name } });
-    setSaves(readJSON(`hep:saves:${u.id}`, [])); setStep(1); setLoginName("");
-  };
-  const switchUser = () => { setCurrentUser(null); applyBundle(DEF); setStep(1); };
-  const removeUser = (id) => { const nu = users.filter(u => u.id !== id); setUsers(nu); writeJSON(USERS_KEY, nu); LS.del(`hep:work:${id}`); LS.del(`hep:saves:${id}`); };
-  const resetForm = () => { applyBundle({ ...DEF, modo, meta: { ...META_DEF, responsavel: currentUser?.name || "" } }); setLoadErr(""); setStep(1); flash("Formulário limpo"); };
+  // ── AUTH (Google via Firebase) ──
+  useEffect(() => {
+    const unsub = cloud.watchAuth(async (user) => {
+      if (user) {
+        setCurrentUser({ uid: user.uid, name: user.displayName || (user.email || "").split("@")[0] || "Sem nome", email: user.email || "", photoURL: user.photoURL || "" });
+        try { setIsAdmin(await cloud.isAdminAsync()); } catch { setIsAdmin(false); }
+      } else { setCurrentUser(null); setIsAdmin(false); setCurrentExp(null); }
+      setAuthReady(true);
+    });
+    return unsub;
+  }, []);
+
+  // Lista compartilhada (tempo real) + perfis do time, quando logado.
+  useEffect(() => {
+    if (!currentUser) { setCloudList([]); setProfilesList([]); return; }
+    const unsub = cloud.watchExperiments(setCloudList);
+    cloud.listProfiles().then(setProfilesList).catch(() => {});
+    return unsub;
+  }, [currentUser]);
+
+  // Anexos do experimento aberto (tempo real).
+  useEffect(() => {
+    const id = currentExp?.id;
+    if (!id) { setAttachments([]); return; }
+    const unsub = cloud.watchAttachments(id, setAttachments);
+    return unsub;
+  }, [currentExp?.id]);
+
+  const doLogin = async () => { setBusy(true); try { await cloud.signInGoogle(); } catch { flash("Falha no login com Google"); } setBusy(false); };
+  const switchUser = async () => { try { await cloud.signOutUser(); } catch {} setCurrentExp(null); applyBundle(DEF); setStep(1); };
+  const resetForm = () => { setCurrentExp(null); applyBundle({ ...DEF, modo, meta: { ...META_DEF, responsavel: currentUser?.name || "" } }); setLoadErr(""); setStep(1); flash("Novo rascunho"); };
   const pickModo = (m) => {
     setModo(m); setStep(1);
     if (m === "validar" && !medidas.some(x => x.name === "Predito") && !medidas.some(x => x.name === "Medido")) setMedidas([{ id: 1, name: "Predito", tipo: "quantitativa", descricao: "Valor previsto pelo modelo." }, { id: 2, name: "Medido", tipo: "quantitativa", descricao: "Valor real medido." }]);
     if (m === "inspecao" && checklist.length === 0) setChecklist([instanciarSecao(CHECKLISTS_LIB[0])]);
   };
-  const applyTemplate = (t) => { applyBundle({ ...DEF, ...t.state, meta }); setShowTemplates(false); setStep(1); flash(`Template "${t.nome}" aplicado`); };
+  const applyTemplate = (t) => { setCurrentExp(null); applyBundle({ ...DEF, ...t.state, meta }); setShowTemplates(false); setStep(1); flash(`Template "${t.nome}" aplicado`); };
   const addFromCatalog = (item) => { setMedidas(ms => [...ms, { id: Date.now(), name: item.name, tipo: item.tipo, descricao: item.descricao }]); flash(`+ ${item.name}`); };
 
-  useEffect(() => { if (!currentUser) return; writeJSON(`hep:work:${currentUser.id}`, bundle()); }, [currentUser, modo, contexto, objetivo, factors, medidas, grupoVar, checklist, replicates, matrix, rows, headers, groupCol, respCol, predX, predY, meta]);
+  // ── Persistência na nuvem (Firestore) ──
+  const kindOf = (m) => m === "inspecao" ? "checklist" : "analysis";
+  const canEditCurrent = currentExp ? cloud.canEdit(currentExp, currentUser?.uid, isAdmin) : true; // rascunho novo = editável
+  const readOnly = !!currentExp && !canEditCurrent;
+  const isOwnerCurrent = currentExp ? (isAdmin || currentExp.ownerId === currentUser?.uid) : true;
 
-  const saveAnalysis = (title) => { if (!currentUser) return; const s = { id: Date.now().toString(36), title: title.trim() || `Análise ${saves.length + 1}`, savedAt: new Date().toISOString(), state: bundle() }; const ns = [s, ...saves]; setSaves(ns); writeJSON(`hep:saves:${currentUser.id}`, ns); setShowSaveDlg(false); setSaveTitle(""); flash("Análise salva"); };
-  const loadAnalysis = (s) => { applyBundle(s.state); setShowSaves(false); flash(`"${s.title}" carregada`); };
-  const deleteAnalysis = (id) => { const ns = saves.filter(x => x.id !== id); setSaves(ns); writeJSON(`hep:saves:${currentUser.id}`, ns); };
+  const persist = async (title) => {
+    if (!currentUser) return;
+    setBusy(true);
+    try {
+      const t = (title || currentExp?.title || meta.descricao || "Sem título").toString().trim().slice(0, 120) || "Sem título";
+      const id = await cloud.saveExperiment({ id: currentExp?.id, title: t, modo, kind: kindOf(modo), bundle: bundle() });
+      setCurrentExp(prev => ({ id, title: t, modo, ownerId: prev?.ownerId || currentUser.uid, ownerName: prev?.ownerName || currentUser.name, editors: prev?.editors || [] }));
+      flash("Salvo na nuvem");
+    } catch { flash("Não foi possível salvar (sem permissão?)"); }
+    setBusy(false); setShowSaveDlg(false); setSaveTitle("");
+  };
+  const onSaveClick = () => { if (currentExp?.id && canEditCurrent) persist(); else setShowSaveDlg(true); };
+
+  const openExperiment = async (summary) => {
+    setBusy(true);
+    try {
+      const full = await cloud.getExperiment(summary.id);
+      if (full?.bundle) applyBundle(full.bundle);
+      setCurrentExp({ id: full.id, title: full.title, modo: full.modo, ownerId: full.ownerId, ownerName: full.ownerName, editors: full.editors || [] });
+      setStep(1); flash(`"${full.title}" aberto${cloud.canEdit({ ownerId: full.ownerId, editors: full.editors }, currentUser?.uid, isAdmin) ? "" : " (somente leitura)"}`);
+    } catch { flash("Erro ao abrir o experimento"); }
+    setBusy(false); setShowSaves(false);
+  };
+  const removeExperiment = async (summary) => {
+    if (!window.confirm(`Excluir "${summary.title}"? Esta ação não pode ser desfeita.`)) return;
+    try { await cloud.deleteExperiment(summary.id); if (currentExp?.id === summary.id) setCurrentExp(null); flash("Excluído"); }
+    catch { flash("Sem permissão para excluir"); }
+  };
+
+  // ── Anexos ──
+  const onUpload = async (fileList) => {
+    if (!currentExp?.id) { flash("Salve o experimento antes de anexar"); return; }
+    if (readOnly) { flash("Somente leitura"); return; }
+    setUploading(true);
+    try { for (const f of Array.from(fileList)) await cloud.uploadAttachment(currentExp.id, f); flash("Anexo enviado"); }
+    catch { flash("Falha no upload"); }
+    setUploading(false);
+  };
+  const removeAttachment = async (att) => { try { await cloud.deleteAttachment(currentExp.id, att); } catch { flash("Falha ao remover anexo"); } };
+
+  // ── Permissão de edição ──
+  const addEditor = async (uid) => { if (!currentExp?.id || !uid) return; try { await cloud.grantEditor(currentExp.id, uid); setCurrentExp(p => ({ ...p, editors: [...(p.editors || []), uid] })); flash("Permissão concedida"); } catch { flash("Sem permissão"); } };
+  const removeEditor = async (uid) => { try { await cloud.revokeEditor(currentExp.id, uid); setCurrentExp(p => ({ ...p, editors: (p.editors || []).filter(x => x !== uid) })); } catch {} };
+
   const exportJSON = () => download(`analise_${(currentUser?.name || "user").replace(/\s/g, "_")}.json`, JSON.stringify({ app: "hydrone-exp", user: currentUser?.name, state: bundle() }, null, 2), "application/json");
-  const importJSON = (e) => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { try { const d = JSON.parse(r.result); if (d.state) { applyBundle(d.state); flash("Análise importada"); } } catch { flash("Arquivo inválido"); } }; r.readAsText(f); };
+  const importJSON = (e) => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { try { const d = JSON.parse(r.result); if (d.state) { setCurrentExp(null); applyBundle(d.state); flash("Análise importada (rascunho novo)"); } } catch { flash("Arquivo inválido"); } }; r.readAsText(f); };
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   const parsedFactors = factors.map(f => ({ ...f, levels: f.levelsRaw.split(",").map(s => s.trim()).filter(Boolean) })).filter(f => f.name.trim() && f.levels.length);
@@ -429,12 +505,13 @@ ${plano}${res}${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` :
     download("relatorio_ensaio.html", html, "text/html");
   };
 
+  const userChip = (<span className="flex items-center gap-1.5 bg-white/15 rounded-full pl-1 pr-3 py-1">{currentUser?.photoURL ? <img src={currentUser.photoURL} alt="" className="w-5 h-5 rounded-full" referrerPolicy="no-referrer" /> : <User size={14} />}<span className="max-w-[8rem] truncate">{currentUser?.name}</span>{isAdmin && <span className="text-[9px] font-bold bg-amber-400 text-blue-950 rounded px-1 leading-tight">ADMIN</span>}</span>);
   const headerActions = (<div className="flex items-center gap-1.5 text-sm">
-    <span className="flex items-center gap-1.5 bg-white/15 rounded-full pl-2 pr-3 py-1"><User size={14} /> {currentUser?.name}</span>
+    {userChip}
     {deferred && <button onClick={installApp} title="Instalar app" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><DownloadCloud size={15} /></button>}
     <button onClick={() => setShowTemplates(true)} title="Templates" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><LayoutTemplate size={15} /></button>
-    <button onClick={() => setShowSaves(true)} title="Minhas análises" className="bg-white/15 hover:bg-white/25 rounded-lg p-2 relative"><FolderOpen size={15} />{saves.length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-blue-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{saves.length}</span>}</button>
-    <button onClick={switchUser} title="Trocar usuário" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><LogOut size={15} /></button>
+    <button onClick={() => setShowSaves(true)} title="Experimentos do time" className="bg-white/15 hover:bg-white/25 rounded-lg p-2 relative"><FolderOpen size={15} />{cloudList.length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-blue-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{cloudList.length}</span>}</button>
+    <button onClick={switchUser} title="Sair" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><LogOut size={15} /></button>
   </div>);
 
   // LOGIN
@@ -443,11 +520,9 @@ ${plano}${res}${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` :
       <img src="/hydrone-logo.png" alt="Hydrone" className="w-44 mb-6 drop-shadow-lg select-none" draggable="false" />
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
         <h1 className="text-lg font-bold text-slate-800 mb-1">Planejador de Experimentos</h1>
-        <p className="text-sm text-slate-500 mb-5">Hydrone · identifique-se para salvar e retomar seus ensaios.</p>
-        <label className="text-xs font-semibold text-slate-500 uppercase">Seu nome</label>
-        <div className="flex gap-2 mt-1"><input value={loginName} onChange={e => setLoginName(e.target.value)} onKeyDown={e => e.key === "Enter" && login(loginName)} placeholder="ex.: Marie" className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" /><button onClick={() => login(loginName)} className="bg-blue-700 hover:bg-blue-800 text-white font-semibold px-4 rounded-lg text-sm">Entrar</button></div>
-        {users.length > 0 && (<div className="mt-5"><p className="text-xs font-semibold text-slate-500 uppercase mb-2">Ou continue como</p><div className="space-y-1.5">{users.map(u => (<div key={u.id} className="flex items-center gap-2"><button onClick={() => login(u.name)} className="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-left text-sm"><User size={15} className="text-blue-700" /> {u.name}</button><button onClick={() => removeUser(u.id)} className="text-slate-300 hover:text-rose-500 p-1"><Trash2 size={15} /></button></div>))}</div></div>)}
-        <p className="text-xs text-slate-400 mt-5">Seus dados ficam salvos neste navegador/dispositivo.</p>
+        <p className="text-sm text-slate-500 mb-5">Hydrone · entre com sua conta Google para salvar e compartilhar seus ensaios com o time.</p>
+        <button onClick={doLogin} disabled={busy} className="w-full flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold px-4 py-2.5 rounded-lg text-sm"><LogIn size={16} /> {busy ? "Entrando…" : "Entrar com Google"}</button>
+        <p className="text-xs text-slate-400 mt-5">Seus experimentos ficam salvos na nuvem do projeto e acessíveis de qualquer dispositivo.</p>
       </div>
     </div>);
   }
@@ -468,10 +543,10 @@ ${plano}${res}${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` :
                 <Ic className="text-blue-700" size={26} /><h4 className="font-bold text-slate-800 mt-2">{m.label}</h4><p className="text-sm text-slate-600 mt-1">{m.desc}</p><p className="text-xs text-amber-800 bg-amber-50 rounded px-2 py-1 mt-2 inline-block">Ex.: {m.ex}</p>
               </button>); })}</div>
           </div>); })}
-        <p className="text-xs text-slate-400 mt-6">Dica: você pode partir de um <button onClick={() => setShowTemplates(true)} className="text-blue-700 font-medium">template</button> ou abrir <button onClick={() => setShowSaves(true)} className="text-blue-700 font-medium">uma análise salva</button>.</p>
+        <p className="text-xs text-slate-400 mt-6">Dica: você pode partir de um <button onClick={() => setShowTemplates(true)} className="text-blue-700 font-medium">template</button> ou abrir <button onClick={() => setShowSaves(true)} className="text-blue-700 font-medium">um experimento do time</button>.</p>
       </main>
       {showTemplates && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowTemplates(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5 max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="flex items-center justify-between mb-3"><h3 className="font-bold text-slate-800 flex items-center gap-2"><LayoutTemplate size={18} className="text-blue-700" /> Templates</h3><button onClick={() => setShowTemplates(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button></div><div className="space-y-2">{TEMPLATES.map(t => (<button key={t.id} onClick={() => applyTemplate(t)} className="w-full text-left border border-slate-200 hover:border-blue-400 hover:bg-blue-50 rounded-lg p-3"><div className="text-sm font-semibold text-slate-800">{t.nome}</div><div className="text-xs text-slate-500 mt-0.5">{t.desc}</div></button>))}</div></div></div>)}
-      {showSaves && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaves(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}><div className="flex items-center justify-between mb-3"><h3 className="font-bold text-slate-800">Minhas análises</h3><button onClick={() => setShowSaves(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button></div>{saves.length === 0 ? <p className="text-sm text-slate-500 py-6 text-center">Nenhuma análise salva ainda.</p> : (<ul className="space-y-2 overflow-auto">{saves.map(s => (<li key={s.id} className="flex items-center gap-2 border border-slate-200 rounded-lg p-2.5"><button onClick={() => loadAnalysis(s)} className="flex-1 text-left"><div className="text-sm font-medium text-slate-800">{s.title}</div><div className="text-xs text-slate-400">{fmtDate(s.savedAt)}</div></button><button onClick={() => deleteAnalysis(s.id)} className="text-slate-300 hover:text-rose-500 p-1"><Trash2 size={15} /></button></li>))}</ul>)}</div></div>)}
+      
     </div>);
   }
 
@@ -485,8 +560,8 @@ ${plano}${res}${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` :
             <div className="flex items-center gap-3"><img src="/hydrone-mark.png" alt="Hydrone" className="h-9 w-9 shrink-0" /><div><h1 className="text-lg font-bold leading-tight">Planejador de Experimentos</h1><p className="text-xs text-blue-100 flex items-center gap-1"><ModoIcon size={12} /> {MODOS[modo].label}</p></div></div>
             <div className="flex items-center gap-1.5 text-sm">
               <button onClick={() => setModo(null)} title="Trocar tipo de ensaio" className="bg-white/15 hover:bg-white/25 rounded-lg px-2.5 py-2 flex items-center gap-1.5"><ArrowLeft size={14} /><span className="hidden sm:inline">Tipo</span></button>
-              <button onClick={() => setShowSaveDlg(true)} title="Salvar" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><Save size={15} /></button>
-              <button onClick={() => setShowSaves(true)} title="Minhas análises" className="bg-white/15 hover:bg-white/25 rounded-lg p-2 relative"><FolderOpen size={15} />{saves.length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-blue-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{saves.length}</span>}</button>
+              <button onClick={onSaveClick} disabled={busy || readOnly} title={readOnly ? "Somente leitura" : "Salvar na nuvem"} className="bg-white/15 hover:bg-white/25 disabled:opacity-50 rounded-lg p-2">{readOnly ? <Lock size={15} /> : <Save size={15} />}</button>
+              <button onClick={() => setShowSaves(true)} title="Experimentos do time" className="bg-white/15 hover:bg-white/25 rounded-lg p-2 relative"><FolderOpen size={15} />{cloudList.length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-blue-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{cloudList.length}</span>}</button>
               <button onClick={resetForm} title="Limpar" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><RotateCcw size={15} /></button>
               <button onClick={switchUser} title="Trocar usuário" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><LogOut size={15} /></button>
             </div>
@@ -499,6 +574,7 @@ ${plano}${res}${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` :
 
       <main className="max-w-5xl mx-auto px-4 py-6">
         {/* STEP 1 — SOBRE O ENSAIO */}
+        {readOnly && (<div className="mb-4 flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-sm"><Lock size={15} className="shrink-0" /> Somente leitura — você não é dono nem editor deste experimento. As alterações não serão salvas.</div>)}
         {step === 1 && (<div className="space-y-6">
           <section className="bg-white rounded-xl border border-slate-200 p-4">
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5"><ClipboardCheck size={15} className="text-blue-700" /> Sobre o ensaio</h2>
@@ -510,6 +586,34 @@ ${plano}${res}${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` :
               <div><label className="text-xs text-slate-500">Equipamento / veículo</label><input value={meta.equipamento} onChange={e => setMeta({ ...meta, equipamento: e.target.value })} placeholder="ex.: Hydrone v2" className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" /></div>
               <div><label className="text-xs text-slate-500">Local</label><input value={meta.local} onChange={e => setMeta({ ...meta, local: e.target.value })} placeholder="ex.: tanque Nautec" className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" /></div>
             </div>
+          </section>
+          <section className="bg-white rounded-xl border border-slate-200 p-4">
+            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Paperclip size={15} className="text-blue-700" /> Anexos (fotos e logs)</h2>
+            {!currentExp?.id ? (
+              <p className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 flex items-center gap-2"><Info size={15} className="text-blue-700 shrink-0" /> Salve o experimento para gerenciar permissões{ATTACHMENTS_ENABLED ? " e anexar fotos e logs (.bin / .tlog)" : ""}.</p>
+            ) : (<>
+              {ATTACHMENTS_ENABLED ? (<>
+              {!readOnly && (<label className={`cursor-pointer inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg ${uploading ? "bg-slate-200 text-slate-500" : "bg-blue-700 hover:bg-blue-800 text-white"}`}><UploadCloud size={15} /> {uploading ? "Enviando…" : "Anexar arquivos"}<input type="file" multiple accept="image/*,.bin,.tlog,.log" disabled={uploading} onChange={e => { onUpload(e.target.files); e.target.value = ""; }} className="hidden" /></label>)}
+              {attachments.length === 0 ? <p className="text-sm text-slate-400 mt-3">Nenhum anexo ainda.</p> : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">{attachments.map(att => { const sz = att.size > 1048576 ? (att.size / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(att.size / 1024)) + " KB"; return (
+                  <div key={att.id} className="relative border border-slate-200 rounded-lg overflow-hidden group">
+                    {att.type === "photo" ? <a href={att.url} target="_blank" rel="noreferrer"><img src={att.url} alt={att.fileName} className="w-full h-24 object-cover" /></a>
+                      : <a href={att.url} target="_blank" rel="noreferrer" className="flex flex-col items-center justify-center h-24 bg-slate-50 text-slate-500 p-2 text-center"><FileText size={22} /><span className="text-[10px] mt-1 break-all line-clamp-2">{att.fileName}</span></a>}
+                    <div className="px-1.5 py-1 text-[10px] text-slate-500 flex items-center justify-between gap-1"><span className="truncate">{att.kind === "log" ? "log" : att.type === "photo" ? "foto" : "arq"} · {sz}</span>{!readOnly && <button onClick={() => removeAttachment(att)} className="text-slate-300 hover:text-rose-500 shrink-0"><Trash2 size={12} /></button>}</div>
+                  </div>); })}</div>
+              )}
+              </>) : (
+                <p className="text-sm text-slate-500 bg-amber-50 border border-amber-100 rounded-lg p-3 flex items-center gap-2"><Paperclip size={15} className="text-amber-600 shrink-0" /> Anexo de fotos e logs chega em breve.</p>
+              )}
+              {isOwnerCurrent && (<div className="mt-4 pt-3 border-t border-slate-100">
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Share2 size={13} className="text-blue-700" /> Compartilhar edição</h3>
+                <div className="flex gap-2">
+                  <select id="editorSel" className="flex-1 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400"><option value="">Escolher pessoa…</option>{profilesList.filter(p => p.uid !== currentExp.ownerId && !(currentExp.editors || []).includes(p.uid)).map(p => <option key={p.uid} value={p.uid}>{p.name}</option>)}</select>
+                  <button onClick={() => { const el = document.getElementById("editorSel"); if (el?.value) { addEditor(el.value); el.value = ""; } }} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 rounded-lg font-medium">Conceder</button>
+                </div>
+                {(currentExp.editors || []).length > 0 && (<div className="flex flex-wrap gap-1.5 mt-2">{currentExp.editors.map(uid => { const p = profilesList.find(x => x.uid === uid); return (<span key={uid} className="flex items-center gap-1 text-xs bg-blue-50 text-blue-800 rounded-full pl-2 pr-1 py-0.5">{p?.name || uid.slice(0, 6)}<button onClick={() => removeEditor(uid)} className="hover:text-rose-500"><X size={12} /></button></span>); })}</div>)}
+              </div>)}
+            </>)}
           </section>
           {modo !== "inspecao" && (<section>
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-2">Contexto</h2>
@@ -672,9 +776,22 @@ ${plano}${res}${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` :
 
       {showTemplates && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowTemplates(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5 max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="flex items-center justify-between mb-3"><h3 className="font-bold text-slate-800 flex items-center gap-2"><LayoutTemplate size={18} className="text-blue-700" /> Templates</h3><button onClick={() => setShowTemplates(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button></div><div className="space-y-2">{TEMPLATES.map(t => (<button key={t.id} onClick={() => applyTemplate(t)} className="w-full text-left border border-slate-200 hover:border-blue-400 hover:bg-blue-50 rounded-lg p-3"><div className="text-sm font-semibold text-slate-800">{t.nome}</div><div className="text-xs text-slate-500 mt-0.5">{t.desc}</div></button>))}</div></div></div>)}
 
-      {showSaveDlg && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaveDlg(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}><h3 className="font-bold text-slate-800 mb-1">Salvar análise</h3><p className="text-xs text-slate-500 mb-3">Guarda o estado atual para retomar depois.</p><input value={saveTitle} onChange={e => setSaveTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && saveAnalysis(saveTitle)} placeholder="Nome do ensaio" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" autoFocus /><div className="flex gap-2 mt-4"><button onClick={() => setShowSaveDlg(false)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={() => saveAnalysis(saveTitle)} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white font-semibold">Salvar</button></div></div></div>)}
+      {showSaves && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaves(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-5 max-h-[82vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-slate-800 flex items-center gap-2"><Users size={18} className="text-blue-700" /> Experimentos do time</h3><button onClick={() => setShowSaves(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button></div>
+        <div className="flex gap-1.5 mb-3 text-xs">{[["todos", "Todos"], ["meus", "Meus"]].map(([k, lb]) => <button key={k} onClick={() => setListFilter(k)} className={`px-3 py-1 rounded-full font-medium ${listFilter === k ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}>{lb}</button>)}</div>
+        {(() => { const lst = cloudList.filter(x => listFilter === "meus" ? (x.ownerId === currentUser?.uid || (x.editors || []).includes(currentUser?.uid)) : true); return lst.length === 0 ? <p className="text-sm text-slate-500 py-6 text-center">Nenhum experimento ainda. Salve o primeiro pelo botão de salvar.</p> : (
+          <ul className="space-y-2 overflow-auto">{lst.map(x => { const mine = x.ownerId === currentUser?.uid; const editable = isAdmin || mine || (x.editors || []).includes(currentUser?.uid); const dt = x.updatedAt?.toDate ? x.updatedAt.toDate().toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; return (
+            <li key={x.id} className="flex items-center gap-2 border border-slate-200 rounded-lg p-2.5">
+              <button onClick={() => openExperiment(x)} className="flex-1 text-left min-w-0">
+                <div className="text-sm font-medium text-slate-800 truncate">{x.title} {MODOS[x.modo] && <span className="text-[10px] uppercase tracking-wide text-blue-700 bg-blue-50 rounded px-1 ml-1">{MODOS[x.modo].label}</span>}</div>
+                <div className="text-xs text-slate-400 flex items-center gap-1.5"><User size={11} /> {mine ? "você" : x.ownerName} · {dt}{!editable && <span className="flex items-center gap-0.5 text-slate-400"><Lock size={10} /> leitura</span>}{editable && !mine && <span className="text-blue-600">editor</span>}</div>
+              </button>
+              {(isAdmin || mine) && <button onClick={() => removeExperiment(x)} title="Excluir" className="text-slate-300 hover:text-rose-500 p-1 shrink-0"><Trash2 size={15} /></button>}
+            </li>); })}</ul>); })()}
+      </div></div>)}
+      {showSaveDlg && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaveDlg(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}><h3 className="font-bold text-slate-800 mb-1">Salvar experimento</h3><p className="text-xs text-slate-500 mb-3">Dê um nome para salvar na nuvem do time.</p><input value={saveTitle} onChange={e => setSaveTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && persist(saveTitle)} placeholder="Nome do ensaio" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" autoFocus /><div className="flex gap-2 mt-4"><button onClick={() => setShowSaveDlg(false)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={() => persist(saveTitle)} disabled={busy} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold">Salvar</button></div></div></div>)}
 
-      {showSaves && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaves(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}><div className="flex items-center justify-between mb-3"><h3 className="font-bold text-slate-800">Minhas análises</h3><button onClick={() => setShowSaves(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button></div>{saves.length === 0 ? <p className="text-sm text-slate-500 py-6 text-center">Nenhuma análise salva ainda.</p> : (<ul className="space-y-2 overflow-auto">{saves.map(s => (<li key={s.id} className="flex items-center gap-2 border border-slate-200 rounded-lg p-2.5"><button onClick={() => loadAnalysis(s)} className="flex-1 text-left"><div className="text-sm font-medium text-slate-800">{s.title}</div><div className="text-xs text-slate-400">{fmtDate(s.savedAt)}</div></button><button onClick={() => deleteAnalysis(s.id)} className="text-slate-300 hover:text-rose-500 p-1"><Trash2 size={15} /></button></li>))}</ul>)}</div></div>)}
+      
 
       {showReport && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowReport(false)}><div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[88vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="p-6 text-slate-800"><div className="flex items-center gap-2 border-b-2 border-blue-700 pb-2 mb-4"><img src="/hydrone-mark.png" alt="Hydrone" className="h-6 w-6 shrink-0" /><div><h2 className="text-lg font-bold">Relatório de Ensaio</h2><p className="text-xs text-slate-500">{MODOS[modo].label} · Hydrone</p></div></div>{meta.descricao && <><h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Descrição</h3><p className="text-sm mb-3">{meta.descricao}</p></>}<table className="w-full text-sm mb-3"><tbody><tr><td className="py-1 pr-3 text-slate-500 w-36">Responsável</td><td className="py-1 font-medium">{meta.responsavel || currentUser.name}</td></tr><tr><td className="py-1 pr-3 text-slate-500">Data</td><td className="py-1 font-medium">{meta.data}</td></tr>{meta.equipamento && <tr><td className="py-1 pr-3 text-slate-500">Equipamento</td><td className="py-1 font-medium">{meta.equipamento}</td></tr>}{meta.local && <tr><td className="py-1 pr-3 text-slate-500">Local</td><td className="py-1 font-medium">{meta.local}</td></tr>}{modo !== "inspecao" && <tr><td className="py-1 pr-3 text-slate-500">Contexto</td><td className="py-1 font-medium">{CONTEXTOS[contexto].label}</td></tr>}</tbody></table>
         {modo === "comparar" && <><h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Planejamento</h3><p className="text-sm mb-1"><b>Delineamento:</b> {obj.design}</p><p className="text-sm mb-1"><b>Fatores:</b> {parsedFactors.length ? parsedFactors.map(f => `${f.name} (${f.levels.join(", ")})`).join(" · ") : "—"}</p><p className="text-sm"><b>Réplicas:</b> {replicates} · <b>Ensaios previstos:</b> {nRuns || "—"}</p></>}

@@ -311,19 +311,19 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
                     {bloco.itens.map(item => {
                       const marcado = selecionados.has(item.id);
                       const aberto = detalheAbertos.has(item.id);
-                      return (<div key={item.id} className={`rounded-lg border p-2.5 ${marcado ? "border-blue-300 bg-blue-50/50" : "border-slate-100"}`}>
+                      return (<div key={item.id} onClick={() => toggleItem(item.id)} className={`rounded-lg border p-2.5 cursor-pointer ${marcado ? "border-blue-300 bg-blue-50/50" : "border-slate-100 hover:border-slate-200"}`}>
                         <div className="flex items-start gap-2">
-                          <input type="checkbox" checked={marcado} onChange={() => toggleItem(item.id)} className="mt-1 shrink-0" />
+                          <input type="checkbox" checked={marcado} onChange={() => toggleItem(item.id)} onClick={e => e.stopPropagation()} className="mt-1 shrink-0" />
                           <div className="flex-1 min-w-0">
                             <div className="text-sm font-semibold text-slate-800">{item.titulo || <span className="text-slate-300">(sem título)</span>}</div>
                             <p className="text-sm text-slate-600 mt-0.5">{item.simples}</p>
-                            <button onClick={() => toggleDetalhe(item.id)} className="text-xs text-blue-700 font-medium flex items-center gap-1 mt-1.5"><ChevronDown size={13} className={`transition-transform ${aberto ? "rotate-180" : ""}`} /> detalhe técnico</button>
+                            <button onClick={e => { e.stopPropagation(); toggleDetalhe(item.id); }} className="text-xs text-blue-700 font-medium flex items-center gap-1 mt-1.5"><ChevronDown size={13} className={`transition-transform ${aberto ? "rotate-180" : ""}`} /> detalhe técnico</button>
                             {aberto && (<div className="mt-1.5 text-xs bg-slate-50 border border-slate-100 rounded-lg p-2 space-y-1.5">
                               <p><b className="text-slate-600">O que isso gera:</b> <span className="text-slate-500">{item.gera || "—"}</span></p>
                               <p><b className="text-slate-600">Por que isso é importante?</b> <span className="text-slate-500">{item.porque || "—"}</span></p>
                             </div>)}
                           </div>
-                          {libEditMode && <div className="flex gap-1 shrink-0"><button onClick={() => openEditItem(bloco.id, item)} className="text-slate-400 hover:text-blue-600 p-1"><Pencil size={13} /></button><button onClick={() => removeItem(bloco.id, item.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 size={13} /></button></div>}
+                          {libEditMode && <div onClick={e => e.stopPropagation()} className="flex gap-1 shrink-0"><button onClick={() => openEditItem(bloco.id, item)} className="text-slate-400 hover:text-blue-600 p-1"><Pencil size={13} /></button><button onClick={() => removeItem(bloco.id, item.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 size={13} /></button></div>}
                         </div>
                       </div>);
                     })}

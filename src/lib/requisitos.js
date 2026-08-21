@@ -1,0 +1,355 @@
+// Biblioteca de requisitos do protocolo Hydrone (HAUV + USV Whiteboat).
+// Cada item tem uma explicação simples (sempre visível) e um detalhe técnico
+// (escondido atrás do botão "detalhe técnico"): o que ele gera e por que importa.
+//
+// captura: como o item é preenchido durante o ensaio.
+//   "valor"    → campo de texto/número (vira coluna na planilha de campo, se escopo = "ensaio")
+//   "status"   → Passou / Falhou / N/A
+//   "tarefa"   → Feito / Pendente / N/A
+// escopo: "sessao" (checado uma vez, no protocolo) ou "ensaio" (repetido a cada ensaio → planilha de campo)
+
+export const CAPTURAS = {
+  status: { label: "Verificação", opcoes: ["Passou", "Falhou", "N/A"] },
+  tarefa: { label: "Tarefa", opcoes: ["Feito", "Pendente", "N/A"] },
+  valor: { label: "Valor", opcoes: [] },
+};
+
+let _iid = 0;
+const uid = () => `r${Date.now().toString(36)}${(_iid++).toString(36)}`;
+
+const it = (id, titulo, simples, gera, porque, captura, escopo, unidade = "") =>
+  ({ id, titulo, simples, gera, porque, captura, escopo, unidade });
+
+export const BLOCOS_PADRAO = [
+  {
+    id: "A", titulo: "Base de tempo comum", core: true,
+    resumo: "Fazer os sensores e as controladoras concordarem sobre \"quando\" cada coisa aconteceu.",
+    itens: [
+      it("A1", "Marco de sincronismo (3 batidas)",
+        "No começo e no fim de cada ensaio, dê três batidas secas na estrutura do veículo. Isso cria um \"marco\" que os sensores registram, para alinhar no tempo os dados de controladoras diferentes.",
+        "Um evento impulsivo reconhecível na aceleração de cada log, usado para calcular o deslocamento entre os relógios internos de cada controladora.",
+        "Cada controladora conta o tempo do seu próprio jeito (em geral, desde que ligou). Sem um marco físico comum, não dá para saber se o instante \"12,3 s\" de um log é o mesmo instante do outro.",
+        "tarefa", "ensaio"),
+      it("A2", "Fonte única de tempo de referência (GPS)",
+        "Antes de começar, confirme que todas as controladoras usam a mesma referência de tempo — o relógio do GPS. Assim dá para comparar quando cada uma registrou algo sem precisar fazer contas.",
+        "Timestamps absolutos comparáveis entre logs de diferentes computadores de bordo.",
+        "Se cada controladora usa seu próprio relógio interno, um atraso de poucos segundos entre ligar uma e outra já desalinha todo o resto dos dados.",
+        "status", "sessao"),
+      it("A3", "Timestamp absoluto no log",
+        "Confira que o log grava a hora real (dia, hora, minuto, segundo), e não só \"segundos desde que ligou\". Só a hora real permite comparar ensaios de dias diferentes.",
+        "Campo de data/hora absoluta em cada linha do log, em vez de um contador relativo ao boot.",
+        "Um contador relativo reinicia a cada religada, o que impede juntar ou comparar ensaios feitos em sessões diferentes.",
+        "status", "sessao"),
+      it("A4", "Taxa de amostragem real do log",
+        "Depois de um ensaio de teste, abra o log e confira quantas leituras por segundo ele realmente gravou. Às vezes o que está configurado no papel não é o que sai de fato no arquivo.",
+        "Confirmação da taxa de amostragem efetiva (Hz) de cada sensor gravado.",
+        "Se a taxa real for menor que a esperada, eventos rápidos (como o impacto do pouso) podem não ser capturados direito.",
+        "valor", "sessao", "Hz"),
+      it("A5", "Deriva de relógio entre controladoras",
+        "Em ensaios longos, o relógio de uma controladora pode ir se atrasando ou adiantando em relação à outra. Compare o intervalo entre as batidas de sincronismo do início e do fim em cada log.",
+        "Estimativa do desvio (drift) acumulado entre os relógios das controladoras ao longo do ensaio.",
+        "Um desvio grande faz o alinhamento pelo marco do início parecer bom, mas ir se perdendo ao longo do ensaio.",
+        "valor", "ensaio", "ms"),
+    ],
+  },
+  {
+    id: "B", titulo: "Medir a entrada / perturbação do pouso", core: true,
+    resumo: "Registrar como o veículo chegou na água — a \"causa\" que depois se compara com a resposta do casco.",
+    itens: [
+      it("B1", "Velocidade vertical no toque com a água",
+        "Registre a que velocidade o veículo estava descendo no instante exato em que tocou a água. É essa velocidade que \"agita\" o casco — quanto mais rápido o pouso, maior o impacto.",
+        "Componente vertical da velocidade (m/s) no instante de contato, extraída do log de altitude/IMU.",
+        "É a principal variável de entrada do fenômeno de pouso; sem ela não dá para relacionar \"o que causou\" com \"o que o casco fez depois\".",
+        "valor", "ensaio", "m/s"),
+      it("B2", "Ângulo de aproximação no toque",
+        "Anote a inclinação do veículo (para frente/trás e para os lados) no momento do toque com a água. Um pouso torto agita o casco de um jeito diferente de um pouso nivelado.",
+        "Pitch e roll (°) no instante de contato, extraídos do IMU.",
+        "O ângulo de entrada muda a área de contato e a distribuição da força de impacto no casco.",
+        "valor", "ensaio", "°"),
+      it("B3", "Estado do mar no momento do pouso",
+        "Descreva como estava a água na hora do pouso (parada, com ondulação leve, com ondas). Isso também empurra o casco e pode se misturar com o efeito que você está tentando medir.",
+        "Registro qualitativo/quantitativo do estado do mar simultâneo ao evento de pouso (não apenas a condição geral do dia).",
+        "Ondas presentes exatamente no instante do pouso são uma perturbação adicional que pode ser confundida com a resposta ao próprio pouso.",
+        "valor", "ensaio"),
+      it("B4", "Vídeo do pouso",
+        "Grave um vídeo do momento do pouso. Se depois os números do sensor parecerem estranhos, o vídeo ajuda a entender o que aconteceu de verdade.",
+        "Registro visual sincronizável (pelo marco de A1) com os dados numéricos do pouso.",
+        "Números isolados não mostram causas incomuns (rajada de vento, pouso torto por engano); o vídeo serve de checagem cruzada.",
+        "tarefa", "ensaio"),
+    ],
+  },
+  {
+    id: "C", titulo: "Medir a resposta do casco", core: true,
+    resumo: "Registrar como o casco reage depois do pouso — o \"efeito\" a explicar.",
+    itens: [
+      it("C1", "Aceleração vertical do casco",
+        "Registre como a aceleração vertical do casco se comporta nos segundos seguintes ao pouso — é o \"chacoalhar\" que você quer entender.",
+        "Série temporal de aceleração vertical (g) do casco, alinhada ao instante de contato.",
+        "É a resposta dinâmica mais direta ao impacto; costuma ser o sinal usado para caracterizar a severidade do pouso.",
+        "valor", "ensaio", "g"),
+      it("C2", "Profundidade de submersão ao longo do tempo",
+        "Registre até onde o casco afundou logo depois do pouso e como essa profundidade volta ao normal com o tempo.",
+        "Série temporal de profundidade (m) desde o instante de contato até a estabilização.",
+        "Mostra a resposta de flutuabilidade do casco, complementar à aceleração — um afundamento maior nem sempre corresponde a mais aceleração.",
+        "valor", "ensaio", "m"),
+      it("C3", "Oscilação do casco após o impacto",
+        "Registre o quanto o casco balança de um lado para o outro (roll) e para frente/trás (pitch) depois do pouso, até parar de balançar.",
+        "Amplitude de roll/pitch (°) ao longo do tempo pós-impacto.",
+        "A oscilação residual indica o quanto de energia do impacto ficou \"guardada\" no movimento do casco em vez de ser amortecida.",
+        "valor", "ensaio", "°"),
+      it("C4", "Tempo até estabilização",
+        "Cronometre quanto tempo o casco leva, depois do pouso, até parar de balançar e ficar estável na água. Defina antes um limite (por exemplo, oscilação menor que 2°) para considerar \"estável\".",
+        "Tempo decorrido (s) entre o contato e o instante em que a oscilação cai abaixo do limite definido.",
+        "Um número único resume a resposta transitória inteira e permite comparar ensaios entre si sem reanalisar toda a série temporal.",
+        "valor", "ensaio", "s"),
+    ],
+  },
+  {
+    id: "D", titulo: "Identificação, separada da validação", core: true,
+    resumo: "Não usar o mesmo dado para ajustar o modelo e para provar que ele funciona.",
+    itens: [
+      it("D1", "Classificar a finalidade de cada ensaio",
+        "Separe uma parte dos ensaios só para \"ensinar\" o modelo — ajustar seus parâmetros até ele bater com o que foi medido — e outra parte, nova, só para conferir se ele funciona.",
+        "Rótulo \"identificação\" ou \"validação\" em cada linha da planilha de campo.",
+        "Sem essa marcação, é fácil perder o controle de quais dados já foram \"vistos\" pelo modelo durante o ajuste.",
+        "valor", "ensaio"),
+      it("D2", "Nunca reaproveitar um ensaio nos dois grupos",
+        "Um ensaio que serviu para ajustar o modelo não pode ser reaproveitado para provar que o modelo funciona — isso seria como corrigir a prova com a mesma pergunta usada para estudar.",
+        "Confirmação de que os conjuntos de identificação e de validação não têm interseção.",
+        "Reaproveitar dados de ajuste na validação superestima a qualidade do modelo (a métrica fica \"otimista\", e o modelo pode falhar em dados realmente novos).",
+        "status", "sessao"),
+      it("D3", "Documentar o critério de separação",
+        "Anote, de forma simples, como você decidiu quais ensaios foram para identificação e quais foram para validação (por exemplo: 70% de cada condição para identificação, 30% novos para validação).",
+        "Descrição textual do critério de particionamento dos dados, anexada ao protocolo.",
+        "Permite que outra pessoa (ou você, meses depois) confira se a separação foi justa e reproduza o processo.",
+        "valor", "sessao"),
+    ],
+  },
+  {
+    id: "E", titulo: "Estatística e condições", core: true,
+    resumo: "Garantir que o que foi observado é padrão, e não coincidência do dia.",
+    itens: [
+      it("E1", "Repetir cada ensaio pelo menos 10 vezes",
+        "Precisamos repetir o mesmo ensaio 10 vezes porque aí conseguimos afirmar que os fenômenos observados são constantes e não fruto do acaso.",
+        "Um conjunto de repetições que permite calcular uma média confiável e estimar o quanto o resultado varia de uma tentativa para outra (desvio-padrão).",
+        "Com uma repetição só, não dá para saber se o resultado foi \"normal\" ou uma coincidência daquele dia. Repetir dá base estatística para separar padrão de ruído.",
+        "valor", "sessao"),
+      it("E2", "Aleatorizar a ordem de execução",
+        "Não faça sempre a condição A, depois sempre a B, depois sempre a C. Embaralhe a ordem. Assim, se algo mudar ao longo do dia (vento aumentando, bateria cansando), esse efeito não fica \"colado\" em uma condição só.",
+        "Sequência de execução dos ensaios sorteada, não fixa por condição.",
+        "Sem aleatorização, uma tendência ao longo do tempo (deriva do equipamento, mudança de clima) se confunde com o efeito que está sendo estudado.",
+        "status", "sessao"),
+      it("E3", "Manter e registrar condições ambientais estáveis",
+        "Tente repetir os ensaios em condições parecidas (vento, temperatura, estado do mar) e anote o que mudou. Se as condições variarem muito de uma repetição para outra, fica difícil saber se a diferença veio do que você está testando ou do ambiente.",
+        "Registro de variação ambiental entre repetições do mesmo ensaio.",
+        "Grande variação ambiental entre repetições aumenta o \"ruído\" e pode mascarar (ou simular) um efeito real.",
+        "status", "sessao"),
+      it("E4", "Definir o critério de sucesso/falha antes de rodar",
+        "Decida, antes de começar, o que conta como \"passou\" e o que conta como \"falhou\" (por exemplo: pousou sem inverter, chegou ao ponto com erro menor que 1 m).",
+        "Critério de sucesso/falha registrado no protocolo antes da coleta de dados.",
+        "Definir o critério depois de ver o resultado abre espaço para julgar os dados a favor de uma conclusão, mesmo sem perceber.",
+        "valor", "sessao"),
+      it("E5", "Registrar o suficiente para alguém reproduzir o ensaio",
+        "Anote tudo que uma outra pessoa precisaria saber para repetir exatamente o seu ensaio: configuração do veículo, local, número de repetições, condições.",
+        "Checklist de itens mínimos de reprodutibilidade, preenchido junto ao protocolo.",
+        "Se as instruções não bastam para outra pessoa reproduzir o ensaio, o resultado não pode ser confirmado de forma independente.",
+        "status", "sessao"),
+    ],
+  },
+  {
+    id: "F", titulo: "Metadados por ensaio (planilha de campo)", core: true,
+    resumo: "Os campos abaixo viram as colunas da planilha que você preenche durante os ensaios.",
+    itens: [
+      it("F1", "ensaio_id", "Dê um número ou código único para cada ensaio, para nunca confundir um com outro depois.",
+        "Chave única que identifica a linha na planilha de campo.", "Sem um identificador único, fica fácil duplicar ou perder o rastro de um ensaio ao juntar dados de fontes diferentes.",
+        "valor", "ensaio"),
+      it("F2", "data", "A data em que o ensaio foi realizado.",
+        "Coluna de data (AAAA-MM-DD) na planilha de campo.", "Permite cruzar o ensaio com condições externas (clima, maré) e ordenar a sequência de execução.",
+        "valor", "ensaio"),
+      it("F3", "hora_gps", "A hora de início do ensaio, tirada do relógio do GPS (não do celular ou de cabeça).",
+        "Coluna de hora absoluta de referência para alinhar com A2/A3.", "É a hora que efetivamente sincroniza com os timestamps dos logs de bordo.",
+        "valor", "ensaio"),
+      it("F4", "veiculo", "Qual veículo/protótipo foi usado neste ensaio (se houver mais de um).",
+        "Coluna categórica identificando o veículo físico usado.", "Diferenças entre unidades do mesmo modelo (montagem, desgaste) podem afetar o resultado.",
+        "valor", "ensaio"),
+      it("F5", "placa_id", "Qual controladora/placa eletrônica específica estava instalada (útil quando há mais de uma unidade do mesmo modelo).",
+        "Coluna categórica identificando a placa/controladora usada.", "Placas diferentes podem ter pequenas variações de calibração ou firmware que afetam a leitura.",
+        "valor", "ensaio"),
+      it("F6", "responsavel", "Quem executou ou registrou este ensaio.",
+        "Coluna de autoria/registro por ensaio.", "Permite rastrear e esclarecer dúvidas sobre como um ensaio específico foi conduzido.",
+        "valor", "ensaio"),
+      it("F7", "local", "Onde o ensaio foi feito (tanque, praia, coordenadas).",
+        "Coluna de local/coordenadas por ensaio.", "O local muda variáveis ambientais relevantes (correnteza, salinidade, espaço disponível).",
+        "valor", "ensaio"),
+      it("F8", "observacoes", "Qualquer coisa fora do comum que aconteceu durante o ensaio e vale a pena lembrar depois.",
+        "Campo de texto livre por ensaio.", "Anomalias não previstas nos campos estruturados só ficam registradas se houver um lugar livre para anotá-las.",
+        "valor", "ensaio"),
+    ],
+  },
+  {
+    id: "seguranca", titulo: "Segurança", fonte: "Guia HAUV · M1",
+    resumo: "Ler e confirmar antes de armar o veículo.",
+    itens: [
+      it("SEG1", "Distância mínima de 5 m durante o armamento",
+        "Antes de ligar os motores, todo mundo precisa estar a pelo menos 5 metros de distância do veículo. Isso evita que alguém se machuque se uma hélice girar sem querer.",
+        "Confirmação de distância mínima de segurança antes do armamento dos motores.",
+        "O armamento pode acionar hélices de forma inesperada; a distância é a primeira barreira contra acidentes.",
+        "tarefa", "ensaio"),
+      it("SEG2", "Sem pessoas nem tráfego marítimo na área",
+        "Olhe ao redor e confirme que não tem gente nem barcos passando perto de onde o ensaio vai acontecer.",
+        "Verificação de área livre de terceiros antes do início do ensaio.",
+        "Terceiros na área de operação não conhecem os riscos do ensaio e podem ser atingidos ou atrapalhar a execução.",
+        "status", "sessao"),
+      it("SEG3", "Estanqueidade verificada antes da imersão",
+        "Confira que os compartimentos que não podem pegar água estão bem fechados antes de colocar o veículo na água.",
+        "Checagem de vedação dos compartimentos estanques imediatamente antes da imersão.",
+        "Um compartimento mal fechado pode alagar em segundos e comprometer eletrônica e flutuabilidade.",
+        "status", "sessao"),
+      it("SEG4", "Operador dedicado de recuperação aquática",
+        "Precisa ter uma pessoa só cuidando de resgatar o veículo (ou uma pessoa) da água, sem fazer mais nada ao mesmo tempo.",
+        "Alocação de um operador exclusivo para resgate em ensaios subaquáticos/de transição.",
+        "Quem está operando o veículo não consegue, ao mesmo tempo, reagir rápido a uma emergência na água.",
+        "tarefa", "ensaio"),
+      it("SEG5", "Bateria carregada ≥ 90% no início",
+        "Confira o nível de carga da bateria antes de começar — abaixo de 90% pode faltar energia no meio do ensaio.",
+        "Confirmação do estado de carga mínimo antes do início do ensaio.",
+        "Ficar sem energia em pleno ensaio (principalmente em voo) é um risco de segurança, não só de dados perdidos.",
+        "status", "ensaio", "%"),
+      it("SEG6", "Materiais necessários disponíveis e preparados",
+        "Confira que tudo que vai ser usado (ferramentas, peças reservas, checklist impresso etc.) já está separado antes de começar.",
+        "Checagem de prontidão logística antes do início da sessão.",
+        "Interromper um ensaio no meio para buscar material aumenta o tempo de exposição a riscos e a chance de erro por pressa.",
+        "tarefa", "sessao"),
+    ],
+  },
+  {
+    id: "mec", titulo: "Pré-ensaio — Estrutura mecânica", fonte: "Guia HAUV · M1",
+    resumo: "Inspeção mecânica antes de cada sessão.",
+    itens: [
+      it("MEC1", "Parafusos e juntas dos braços apertados", "Aperte à mão os parafusos dos braços; se algum estiver frouxo, o veículo pode vibrar ou até se soltar em operação.",
+        "Verificação de torque/aperto das juntas estruturais.", "Folga estrutural altera a resposta dinâmica do veículo e pode evoluir para falha mecânica.", "status", "sessao"),
+      it("MEC2", "Hélices aéreas sem danos ou folga", "Olhe e sinta as hélices aéreas: rachaduras ou folga no encaixe derrubam o desempenho e podem ser perigosas.",
+        "Inspeção visual/tátil das hélices aéreas.", "Uma hélice danificada pode se romper em operação e desbalancear o veículo.", "status", "sessao"),
+      it("MEC3", "Hélices subaquáticas sem danos ou folga", "Mesma checagem, mas nas hélices que giram dentro d'água.",
+        "Inspeção visual/tátil das hélices subaquáticas.", "Danos nesse conjunto afetam empuxo e podem gerar vibração transmitida ao casco.", "status", "sessao"),
+      it("MEC4", "Mecanismo de dobramento funcional (se aplicável)", "Se o veículo tem braços que dobram, teste se dobram e travam direito antes do ensaio.",
+        "Teste funcional do mecanismo de dobra.", "Uma trava que falha em voo/mergulho muda a geometria do veículo de forma imprevista.", "status", "sessao"),
+      it("MEC5", "Material de flutuação (espuma) íntegro", "Verifique se a espuma que ajuda o veículo a boiar não está rachada, amassada ou soltando pedaços.",
+        "Inspeção do material de flutuabilidade.", "Perda de flutuabilidade muda o comportamento na água e pode comprometer a recuperação do veículo.", "status", "sessao"),
+      it("MEC6", "Vedações dos compartimentos eletrônicos", "Confira se os anéis de vedação (o-rings) das caixas eletrônicas estão no lugar e sem cortes.",
+        "Inspeção das vedações (o-rings) das caixas estanques.", "Vedação comprometida é a causa mais comum de alagamento de eletrônica.", "status", "sessao"),
+      it("MEC7", "Cabos e conectores livres de corrosão", "Olhe os cabos e conectores procurando ferrugem ou esverdeado — sinal de que a água já entrou em algum lugar.",
+        "Inspeção visual de corrosão em cabos e conectores.", "Corrosão aumenta resistência de contato e pode causar falha elétrica intermitente, difícil de diagnosticar depois.", "status", "sessao"),
+      it("MEC8", "Distribuição de massa simétrica", "Veja se o peso está bem distribuído dos dois lados do veículo; desbalanceamento atrapalha o controle.",
+        "Checagem de simetria de massa em relação ao eixo central.", "Assimetria de massa exige compensação contínua do controlador e pode limitar o desempenho.", "status", "sessao"),
+      it("MEC9", "CG abaixo do CB (verificar no tanque)", "Coloque o veículo na água parado: o centro de gravidade precisa ficar abaixo do centro de flutuação, senão ele vira de cabeça para baixo.",
+        "Verificação prática de estabilidade estática em tanque.", "CG acima do CB é uma condição de equilíbrio instável — o veículo tende a capotar sozinho.", "status", "sessao"),
+      it("MEC10", "Braços dobráveis — ângulo de dobra correto (se aplicável)", "Confira se os braços dobráveis param no ângulo certo, nem mais aberto nem mais fechado do que deveriam.",
+        "Verificação do ângulo final do mecanismo de dobra.", "Um ângulo fora da especificação muda a geometria aerodinâmica/hidrodinâmica prevista no projeto.", "status", "sessao"),
+    ],
+  },
+  {
+    id: "elet", titulo: "Pré-ensaio — Sistema eletrônico", fonte: "Guia HAUV · M1",
+    resumo: "Inspeção e calibração eletrônica antes de cada sessão.",
+    itens: [
+      it("ELE1", "Tensão da bateria ≥ 90%", "Meça a tensão real da bateria com o multímetro ou telemetria, não só a estimativa da porcentagem.",
+        "Medição direta de tensão antes do início.", "A porcentagem estimada pode divergir da tensão real, especialmente em baterias mais usadas.", "status", "sessao", "V"),
+      it("ELE2", "Calibração do IMU aéreo", "Calibre o sensor de movimento (IMU) da parte aérea seguindo o procedimento do fabricante.",
+        "Calibração do sensor inercial do subsistema aéreo.", "Um IMU descalibrado introduz erro sistemático em toda leitura de atitude e aceleração.", "tarefa", "sessao"),
+      it("ELE3", "Calibração do IMU subaquático", "Mesma calibração, mas no sensor de movimento da parte que vai para dentro d'água.",
+        "Calibração do sensor inercial do subsistema subaquático.", "Mesmo risco do item anterior, aplicado ao conjunto que opera submerso.", "tarefa", "sessao"),
+      it("ELE4", "Calibração da bússola", "Calibre a bússola longe de metal e ímãs, para as leituras de direção não saírem tortas.",
+        "Calibração do magnetômetro.", "Interferência magnética não corrigida desalinha o rumo (heading) usado pelo controlador.", "tarefa", "sessao"),
+      it("ELE5", "Fix de GPS (≥ 8 satélites)", "Antes de armar, confira que o GPS já está enxergando pelo menos 8 satélites — menos que isso, a posição fica imprecisa.",
+        "Verificação da contagem de satélites e qualidade do fix antes do armamento.", "Um fix fraco aumenta o erro de posição, afetando tanto segurança quanto a qualidade dos dados de trajetória.", "status", "ensaio", "sats"),
+      it("ELE6", "Parâmetros PID aéreo carregados", "Confirme que os parâmetros de controle (PID) do modo aéreo estão carregados na controladora, e não os de outro veículo.",
+        "Checagem dos ganhos de controle carregados no firmware.", "Ganhos errados (de outro veículo/configuração) podem tornar o controle instável.", "status", "sessao"),
+      it("ELE7", "Parâmetros S-plane/PID subaquático carregados", "Mesma confirmação, para os parâmetros de controle do modo subaquático.",
+        "Checagem dos ganhos de controle do modo subaquático.", "Mesmo risco do item anterior, no subsistema subaquático.", "status", "sessao"),
+      it("ELE8", "Sensor de profundidade — zero em superfície", "Com o veículo na superfície da água, zere o sensor de profundidade para as leituras começarem do lugar certo.",
+        "Calibração do zero do sensor de pressão/profundidade.", "Um offset não corrigido desloca todas as leituras de profundidade do ensaio inteiro.", "tarefa", "ensaio"),
+      it("ELE9", "Log de dados habilitado (SD/telemetria)", "Confirme que a gravação de dados está ligada antes de começar — sem isso, o ensaio não deixa registro.",
+        "Confirmação de que o log está ativo e gravando antes do início do ensaio.", "É o requisito mais básico de todos: sem log, não há dado para analisar depois.", "status", "ensaio"),
+      it("ELE10", "Link de rádio/Bluetooth operacional", "Teste o rádio ou Bluetooth de controle/telemetria antes de colocar o veículo em operação.",
+        "Teste de comunicação antes do início da operação.", "Perda de link durante o ensaio pode impedir intervenção em caso de problema.", "status", "sessao"),
+      it("ELE11", "ESCs aéreos — armamento testado em terra", "Teste o armamento dos motores aéreos em terra firme antes de ir para a água.",
+        "Teste de armamento em bancada/terra antes da operação real.", "Detectar um problema de armamento em terra é seguro; detectá-lo já no ar ou na água, não.", "tarefa", "sessao"),
+      it("ELE12", "ESCs subaquáticos — rotação testada em água", "Teste se os motores subaquáticos giram no sentido certo, já dentro d'água, antes do ensaio de verdade.",
+        "Teste funcional de sentido de rotação em água.", "Rotação invertida em algum propulsor gera empuxo na direção errada e pode ser confundida com falha de controle.", "tarefa", "sessao"),
+    ],
+  },
+  {
+    id: "ambiente", titulo: "Condições ambientais", fonte: "Guia HAUV · M1",
+    resumo: "Registro do ambiente no momento do ensaio.",
+    itens: [
+      it("AMB1", "Data e hora", "Anote o dia e a hora em que o ensaio foi feito.", "Carimbo de data/hora do registro ambiental.", "Permite cruzar as condições com o restante do log do ensaio.", "valor", "ensaio"),
+      it("AMB2", "Local (coordenadas GPS)", "Anote onde o ensaio foi feito, de preferência com coordenadas de GPS.", "Coordenadas do local do ensaio.", "O local influencia correnteza, salinidade e exposição ao vento.", "valor", "ensaio"),
+      it("AMB3", "Velocidade do vento", "Meça a velocidade do vento no momento do ensaio; vento forte muda o comportamento do veículo.", "Medição de velocidade do vento.", "É uma das principais fontes de perturbação externa em ensaios ao ar livre.", "valor", "ensaio", "m/s"),
+      it("AMB4", "Direção do vento", "Anote de onde o vento está vindo.", "Registro da direção do vento.", "A direção relativa ao veículo muda o tipo de perturbação (frontal, lateral).", "valor", "ensaio", "°"),
+      it("AMB5", "Temperatura do ar", "Meça a temperatura do ar.", "Registro de temperatura ambiente.", "Afeta densidade do ar (empuxo aéreo) e desempenho da bateria.", "valor", "ensaio", "°C"),
+      it("AMB6", "Temperatura da água (superfície)", "Meça a temperatura da água na superfície.", "Registro de temperatura da água.", "Afeta densidade da água e, indiretamente, a flutuabilidade.", "valor", "ensaio", "°C"),
+      it("AMB7", "Estado do mar (escala WMO)", "Classifique o estado do mar numa escala padrão (0 = espelhado, aumentando com o tamanho das ondas).", "Classificação padronizada do estado do mar.", "Permite comparar ensaios de dias diferentes usando uma escala comum, em vez de uma descrição subjetiva.", "valor", "ensaio"),
+      it("AMB8", "Altura de ondas (estimada)", "Estime a altura das ondas, mesmo que a olho.", "Estimativa de altura de onda.", "É uma perturbação direta sobre o pouso e a resposta do casco (Blocos B/C).", "valor", "ensaio", "m"),
+      it("AMB9", "Salinidade", "Meça a salinidade da água, se tiver o instrumento.", "Registro de salinidade (PSU).", "Afeta a densidade da água e, portanto, a flutuabilidade e o empuxo medido.", "valor", "ensaio", "PSU"),
+      it("AMB10", "Corrente de superfície", "Estime a velocidade da corrente de água na superfície.", "Registro de corrente de superfície.", "Corrente lateral pode ser confundida com efeito do próprio veículo se não for registrada.", "valor", "ensaio", "m/s"),
+    ],
+  },
+  {
+    id: "pos", titulo: "Pós-ensaio", fonte: "Guia HAUV · M7",
+    resumo: "Cuidados e registro logo depois do ensaio.",
+    itens: [
+      it("POS1", "Lavar com água doce (se ensaio em água salgada)", "Depois de um ensaio em água salgada, lave o veículo com água doce para tirar o sal antes que ele corroa as peças.",
+        "Procedimento de descontaminação pós-ensaio.", "Sal residual acelera corrosão de contatos elétricos e partes metálicas.", "tarefa", "ensaio"),
+      it("POS2", "Verificar integridade dos vedantes e caixas eletrônicas", "Depois do ensaio, confira de novo se não entrou água em nenhuma caixa eletrônica.",
+        "Segunda inspeção de estanqueidade, agora pós-operação.", "Um vedante pode falhar sob pressão real, mesmo tendo passado na checagem antes do ensaio.", "status", "ensaio"),
+      it("POS3", "Descarregar baterias para armazenamento (~50%)", "Se a bateria não for usada logo, descarregue até uns 50% antes de guardar — isso prolonga a vida dela.",
+        "Procedimento de armazenamento de baterias LiPo/Li-ion.", "Guardar bateria cheia ou vazia por muito tempo reduz sua vida útil e pode ser um risco de segurança.", "tarefa", "sessao"),
+      it("POS4", "Exportar e fazer backup dos logs", "Copie os arquivos de log do ensaio para um lugar seguro antes de apagar o cartão ou desligar tudo.",
+        "Backup dos arquivos de log gerados no ensaio.", "É o único jeito de garantir que o esforço de campo não se perde por um cartão corrompido ou apagado.", "tarefa", "ensaio"),
+      it("POS5", "Inspecionar hélices e propulsores por danos", "Olhe as hélices de novo depois do ensaio — impactos podem ter deixado marcas que não estavam lá antes.",
+        "Segunda inspeção de hélices/propulsores, pós-operação.", "Detectar dano cedo evita que ele evolua e comprometa o próximo ensaio.", "status", "ensaio"),
+      it("POS6", "Lubrificar pontos de giro dos braços dobráveis (se aplicável)", "Se o veículo tem dobradiças, passe lubrificante nos pontos de giro depois do uso em água salgada.",
+        "Manutenção preventiva dos mecanismos móveis.", "Água salgada resseca e engripa mecanismos móveis se não forem lubrificados regularmente.", "tarefa", "sessao"),
+      it("POS7", "Registrar falhas ou anomalias no diário", "Anote qualquer coisa estranha que aconteceu, mesmo pequena — isso ajuda a enxergar padrões ao longo do tempo.",
+        "Registro textual de anomalias no diário de bordo do projeto.", "Eventos que parecem isolados podem, vistos em conjunto ao longo do tempo, revelar uma falha sistemática.", "tarefa", "sessao"),
+    ],
+  },
+];
+
+// Sugestão de ordem de execução em campo (aparece no topo do plano gerado).
+export const ORDEM_SUGERIDA = [
+  { bloco: "seguranca", nota: "Confirme segurança antes de qualquer outra coisa." },
+  { bloco: "mec", nota: "Inspeção mecânica." },
+  { bloco: "elet", nota: "Inspeção e calibração eletrônica." },
+  { bloco: "ambiente", nota: "Registre as condições ambientais do dia." },
+  { bloco: "A", nota: "Confirme a base de tempo comum antes do primeiro ensaio." },
+  { bloco: "E", nota: "Relembre o critério de sucesso/falha e a ordem aleatorizada dos ensaios." },
+  { bloco: "B", nota: "Durante cada ensaio: registre a entrada/perturbação do pouso." },
+  { bloco: "C", nota: "Durante cada ensaio: registre a resposta do casco." },
+  { bloco: "F", nota: "Preencha os metadados de cada ensaio na planilha de campo." },
+  { bloco: "D", nota: "Ao fim da sessão: classifique os ensaios em identificação/validação." },
+  { bloco: "pos", nota: "Procedimentos de pós-ensaio." },
+];
+
+const STORAGE_KEY = "hep:requisitos:v1";
+
+export function loadBlocos() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "null");
+    if (Array.isArray(saved) && saved.length) return saved;
+  } catch { /* ignora e usa o padrão */ }
+  return BLOCOS_PADRAO;
+}
+export function saveBlocos(blocos) {
+  try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(blocos)); } catch { /* localStorage indisponível */ }
+}
+export function resetBlocos() {
+  try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* localStorage indisponível */ }
+  return BLOCOS_PADRAO;
+}
+export function novoItemVazio() {
+  return it(uid(), "", "", "", "", "valor", "ensaio");
+}
+export function novoBlocoVazio() {
+  return { id: uid(), titulo: "Novo bloco", resumo: "", itens: [] };
+}

@@ -1,17 +1,19 @@
 import { useState, useMemo, useEffect } from "react";
 import {
-  Waves, ClipboardList, ClipboardCheck, Download, Upload, Plus, Trash2, Info, BookOpen, ChevronDown,
+  Waves, Gauge, Rocket, ClipboardList, ClipboardCheck, Download, Upload, Plus, Trash2, Info, BookOpen, ChevronDown,
   CheckCircle2, User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileJson, FileText,
   DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Table2,
 } from "lucide-react";
 import * as cloud from "./cloud";
 import { download, toCSV } from "./lib/stats";
-import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORDEM_SUGERIDA, CAPTURAS } from "./lib/requisitos";
+import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORDEM_SUGERIDA, CAPTURAS, CATEGORIAS, CATEGORIA_PADRAO } from "./lib/requisitos";
 import AnalisarDados from "./AnalisarDados";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const META_DEF = { nome: "", descricao: "", responsavel: "", data: today(), equipamento: "", local: "", notas: "" };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ICONES_CATEGORIA = { Waves, Gauge, Rocket };
+const categoriaMeta = (id) => CATEGORIAS.find(c => c.id === id) || CATEGORIAS[0];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -31,6 +33,7 @@ export default function App() {
 
   const [step, setStep] = useState(1);
   const [meta, setMeta] = useState({ ...META_DEF });
+  const [categoriaAtiva, setCategoriaAtiva] = useState(CATEGORIA_PADRAO);
 
   const [blocos, setBlocos] = useState(() => loadBlocos());
   const [selecionados, setSelecionados] = useState(() => new Set());
@@ -43,9 +46,10 @@ export default function App() {
 
   useEffect(() => { saveBlocos(blocos); }, [blocos]);
 
-  const bundle = () => ({ meta, selecionados: [...selecionados], ensaioRows, sessaoValores });
+  const bundle = () => ({ meta, categoria: categoriaAtiva, selecionados: [...selecionados], ensaioRows, sessaoValores });
   const applyBundle = (b) => {
     setMeta(b?.meta ? { ...META_DEF, ...b.meta } : { ...META_DEF });
+    setCategoriaAtiva(b?.categoria || CATEGORIA_PADRAO);
     setSelecionados(new Set(b?.selecionados || []));
     setEnsaioRows(b?.ensaioRows || []);
     setSessaoValores(b?.sessaoValores || {});
@@ -75,7 +79,7 @@ export default function App() {
 
   const doLogin = async () => { setBusy(true); try { await cloud.signInGoogle(); } catch { flash("Falha no login com Google"); } setBusy(false); };
   const switchUser = async () => { try { await cloud.signOutUser(); } catch {} setCurrentExp(null); applyBundle(null); setStep(1); };
-  const resetForm = () => { setCurrentExp(null); applyBundle({ meta: { ...META_DEF, responsavel: currentUser?.name || "" } }); setStep(1); flash("Novo rascunho"); };
+  const resetForm = () => { setCurrentExp(null); applyBundle({ meta: { ...META_DEF, responsavel: currentUser?.name || "" }, categoria: CATEGORIA_PADRAO }); setStep(1); flash("Novo rascunho"); };
 
   // ── Persistência na nuvem (Firestore), por pessoa ──
   const canEditCurrent = currentExp ? cloud.canEdit(currentExp, currentUser?.uid, isAdmin) : true;
@@ -87,7 +91,7 @@ export default function App() {
     setBusy(true);
     try {
       const t = (title || currentExp?.title || meta.nome || "Sem título").toString().trim().slice(0, 120) || "Sem título";
-      const id = await cloud.saveExperiment({ id: currentExp?.id, title: t, modo: "protocolo", kind: "protocolo", bundle: bundle() });
+      const id = await cloud.saveExperiment({ id: currentExp?.id, title: t, modo: categoriaAtiva, kind: "protocolo", bundle: bundle() });
       setCurrentExp(prev => ({ id, title: t, ownerId: prev?.ownerId || currentUser.uid, ownerName: prev?.ownerName || currentUser.name, editors: prev?.editors || [] }));
       flash("Salvo na nuvem");
     } catch { flash("Não foi possível salvar (sem permissão?)"); }
@@ -149,7 +153,7 @@ export default function App() {
   const saveBlocoDraft = () => {
     if (!blocoDraft.titulo.trim()) { flash("Dê um título ao bloco"); return; }
     if (blocoDraft.id) setBlocos(bs => bs.map(b => b.id === blocoDraft.id ? { ...b, titulo: blocoDraft.titulo, resumo: blocoDraft.resumo, fonte: blocoDraft.fonte } : b));
-    else setBlocos(bs => [...bs, { ...novoBlocoVazio(), titulo: blocoDraft.titulo, resumo: blocoDraft.resumo, fonte: blocoDraft.fonte }]);
+    else setBlocos(bs => [...bs, { ...novoBlocoVazio(categoriaAtiva), titulo: blocoDraft.titulo, resumo: blocoDraft.resumo, fonte: blocoDraft.fonte }]);
     setBlocoDraft(null);
   };
   const removeBloco = (blocoId) => {
@@ -160,8 +164,9 @@ export default function App() {
   };
   const restaurarPadrao = () => { if (!window.confirm("Restaurar a biblioteca de requisitos para o padrão? Seus itens e blocos personalizados serão perdidos.")) return; setBlocos(resetBlocos()); flash("Biblioteca restaurada"); };
 
-  // ── Plano gerado a partir do que foi marcado ──
-  const selectedFlat = useMemo(() => blocos.flatMap(b => b.itens.filter(i => selecionados.has(i.id)).map(i => ({ ...i, blocoId: b.id, blocoTitulo: b.titulo, blocoFonte: b.fonte }))), [blocos, selecionados]);
+  // ── Plano gerado a partir do que foi marcado, sempre restrito à categoria ativa ──
+  const blocosAtivos = useMemo(() => blocos.filter(b => (b.categoria || CATEGORIA_PADRAO) === categoriaAtiva), [blocos, categoriaAtiva]);
+  const selectedFlat = useMemo(() => blocosAtivos.flatMap(b => b.itens.filter(i => selecionados.has(i.id)).map(i => ({ ...i, blocoId: b.id, blocoTitulo: b.titulo, blocoFonte: b.fonte }))), [blocosAtivos, selecionados]);
   const sessaoItems = selectedFlat.filter(i => i.escopo === "sessao");
   const ensaioItems = selectedFlat.filter(i => i.escopo === "ensaio");
   const blocosComSelecao = blocos.filter(b => selectedFlat.some(i => i.blocoId === b.id));
@@ -178,7 +183,7 @@ export default function App() {
 
   // ── Relatório (PDF) ──
   const buildReportHTML = () => {
-    const ordem = ORDEM_SUGERIDA.filter(o => blocosComSelecao.some(b => b.id === o.bloco))
+    const ordem = (ORDEM_SUGERIDA[categoriaAtiva] || []).filter(o => blocosComSelecao.some(b => b.id === o.bloco))
       .map(o => { const b = blocos.find(x => x.id === o.bloco); return `<li><b>${esc(b?.titulo || o.bloco)}</b> — ${esc(o.nota)}</li>`; }).join("");
     const requisitosHTML = blocosComSelecao.map(b => {
       const itens = selectedFlat.filter(i => i.blocoId === b.id);
@@ -186,8 +191,8 @@ export default function App() {
     }).join("");
     const sessaoHTML = sessaoItems.length ? `<h2>Checklist da sessão</h2><table><tr><th>Item</th><th>Resultado</th></tr>${sessaoItems.map(i => { const v = sessaoValores[i.id] || {}; const val = i.captura === "valor" ? (v.valor || "—") : (v.resultado || "—"); return `<tr><td>${esc(i.titulo)}</td><td>${esc(val)}${i.unidade && v.valor ? " " + esc(i.unidade) : ""}</td></tr>`; }).join("")}</table>` : "";
     const planilhaHTML = ensaioItems.length && ensaioRows.length ? `<h2>Planilha de campo</h2><table><tr><th>#</th>${ensaioItems.map(i => `<th>${esc(i.titulo)}${i.unidade ? ` (${esc(i.unidade)})` : ""}</th>`).join("")}</tr>${ensaioRows.map((r, idx) => `<tr><td>${idx + 1}</td>${ensaioItems.map(i => `<td>${esc(r[i.id] ?? "")}</td>`).join("")}</tr>`).join("")}</table>` : "";
-    return `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Protocolo de Ensaio — Hydrone</title><style>body{font-family:Arial,sans-serif;color:#1e293b;max-width:760px;margin:24px auto;padding:0 24px}h1{font-size:20px;color:#1e40af;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px}.sub{font-size:12px;color:#64748b;margin:0 0 16px}h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#1e40af;margin:20px 0 6px}table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0}td,th{text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0}.meta td:first-child{color:#64748b;width:160px}p{font-size:13px;line-height:1.5;margin:4px 0}ul{font-size:13px;color:#334155}.foot{font-size:11px;color:#94a3b8;margin-top:24px;border-top:1px solid #e2e8f0;padding-top:8px}@media print{body{margin:0}}</style></head><body>
-<div style="display:flex;align-items:center;gap:10px;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px"><img src="/hydrone-mark.png" alt="Hydrone" style="height:34px;width:34px"><h1 style="border:0;margin:0;padding:0">Protocolo de Ensaio</h1></div><p class="sub">${esc(meta.nome || "Sem nome")} · Planejador de Experimentos Hydrone</p>
+    return `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Protocolo de Ensaio — Hydrone</title><style>body{font-family:Arial,sans-serif;color:#1e293b;max-width:760px;margin:24px auto;padding:0 24px}h1{font-size:20px;color:#1e40af;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px}.sub{font-size:12px;color:#64748b;margin:0 0 16px}h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#1e40af;margin:20px 0 6px}table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0}td,th{text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0}.meta td:first-child{color:#64748b;width:160px}p{font-size:13px;line-height:1.5;margin:4px 0}ul{font-size:13px;color:#334155}.foot{font-size:11px;color:#94a3b8;margin-top:24px;border-top:1px solid #e2e8f0;padding-top:8px}.cat-badge{display:inline-block;font-size:11px;font-weight:700;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:2px 8px;margin:2px 0 14px}@media print{body{margin:0}}</style></head><body>
+<div style="display:flex;align-items:center;gap:10px;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px"><img src="/hydrone-mark.png" alt="Hydrone" style="height:34px;width:34px"><h1 style="border:0;margin:0;padding:0">Protocolo de Ensaio</h1></div><p class="sub">${esc(meta.nome || "Sem nome")} · Planejador de Experimentos Hydrone</p><span class="cat-badge">${esc(categoriaMeta(categoriaAtiva).label)}</span>
 ${meta.descricao ? `<h2>Descrição</h2><p>${esc(meta.descricao)}</p>` : ""}
 <table class="meta"><tr><td>Responsável</td><td>${esc(meta.responsavel || currentUser?.name || "")}</td></tr><tr><td>Data</td><td>${esc(meta.data)}</td></tr>${meta.equipamento ? `<tr><td>Equipamento</td><td>${esc(meta.equipamento)}</td></tr>` : ""}${meta.local ? `<tr><td>Local</td><td>${esc(meta.local)}</td></tr>` : ""}</table>
 ${ordem ? `<h2>Sugestão de ordem em campo</h2><ol style="font-size:13px;padding-left:18px">${ordem}</ol>` : ""}
@@ -249,6 +254,24 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
         {/* TELA 1 — SOBRE O EXPERIMENTO */}
         {step === 1 && (<div className="space-y-6">
           <section className="bg-white rounded-xl border border-slate-200 p-4">
+            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Categoria do experimento</h2>
+            <div className="grid sm:grid-cols-3 gap-2">
+              {CATEGORIAS.map(cat => {
+                const Icone = ICONES_CATEGORIA[cat.icone] || Waves;
+                const ativo = categoriaAtiva === cat.id;
+                return (<button key={cat.id} onClick={() => setCategoriaAtiva(cat.id)}
+                  className={`text-left rounded-xl border-2 p-3 transition ${ativo ? "border-blue-600 bg-blue-50" : "border-slate-200 hover:border-blue-300"}`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Icone size={16} className={ativo ? "text-blue-700" : "text-slate-400"} />
+                    <span className={`text-sm font-bold ${ativo ? "text-blue-800" : "text-slate-700"}`}>{cat.label}</span>
+                  </div>
+                  <p className="text-xs text-slate-500">{cat.descricao}</p>
+                </button>);
+              })}
+            </div>
+          </section>
+
+          <section className="bg-white rounded-xl border border-slate-200 p-4">
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Waves size={15} className="text-blue-700" /> Sobre o experimento</h2>
             <label className="text-xs text-slate-500 font-medium">Nome do experimento</label>
             <input value={meta.nome} onChange={e => setMeta({ ...meta, nome: e.target.value })} placeholder="ex.: Resposta do casco ao pouso — série 1" className="w-full mt-1 mb-3 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" />
@@ -278,7 +301,11 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
         {step === 2 && (<div className="space-y-6">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <button onClick={() => setStep(1)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> Sobre o experimento</button>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-blue-800 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 flex items-center gap-1.5">
+                {(() => { const Icone = ICONES_CATEGORIA[categoriaMeta(categoriaAtiva).icone] || Waves; return <Icone size={12} />; })()}
+                {categoriaMeta(categoriaAtiva).label}
+              </span>
               <button onClick={() => setLibEditMode(v => !v)} className={`text-sm px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 ${libEditMode ? "bg-blue-700 text-white" : "bg-white border border-slate-200 text-slate-600"}`}><Pencil size={14} /> {libEditMode ? "Concluir edição" : "Editar biblioteca"}</button>
               {libEditMode && <button onClick={restaurarPadrao} className="text-sm px-3 py-1.5 rounded-lg font-medium bg-white border border-slate-200 text-slate-600 flex items-center gap-1.5"><RotateCcw size={14} /> Restaurar padrão</button>}
             </div>
@@ -287,7 +314,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
           <section className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm text-slate-700">
             <p className="flex items-center gap-1.5 font-semibold text-blue-900"><Info size={15} /> Sugestão de ordem em campo</p>
             <ol className="mt-1.5 list-decimal list-inside space-y-0.5 text-slate-600">
-              {ORDEM_SUGERIDA.map((o, i) => { const b = blocos.find(x => x.id === o.bloco); if (!b) return null; return <li key={i}><b className="text-slate-700">{b.titulo}</b> — {o.nota}</li>; })}
+              {(ORDEM_SUGERIDA[categoriaAtiva] || []).map((o, i) => { const b = blocosAtivos.find(x => x.id === o.bloco); if (!b) return null; return <li key={i}><b className="text-slate-700">{b.titulo}</b> — {o.nota}</li>; })}
             </ol>
           </section>
 
@@ -295,7 +322,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-1">Marque o que se aplica</h2>
             <p className="text-xs text-slate-500 mb-3">Cada requisito já vem com uma explicação simples. Toque em "detalhe técnico" para ver o rigor por trás.</p>
             <div className="space-y-3">
-              {blocos.map(bloco => {
+              {blocosAtivos.map(bloco => {
                 const ids = bloco.itens.map(i => i.id);
                 const todos = ids.length > 0 && ids.every(id => selecionados.has(id));
                 const algum = ids.some(id => selecionados.has(id));
@@ -413,6 +440,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
               <button onClick={() => openExperiment(x)} className="flex-1 text-left min-w-0">
                 <div className="text-sm font-medium text-slate-800 truncate">{x.title}</div>
                 <div className="text-xs text-slate-400 flex items-center gap-1.5"><User size={11} /> {mine ? "você" : x.ownerName} · {dt}{!editable && <span className="flex items-center gap-0.5 text-slate-400"><Lock size={10} /> leitura</span>}{editable && !mine && <span className="text-blue-600">editor</span>}</div>
+                <span className="inline-block text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5 mt-1">{categoriaMeta(x.modo).label}</span>
               </button>
               {(isAdmin || mine) && <button onClick={() => removeExperiment(x)} title="Excluir" className="text-slate-300 hover:text-rose-500 p-1 shrink-0"><Trash2 size={15} /></button>}
             </li>); })}</ul>); })()}
@@ -422,6 +450,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
 
       {showReport && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowReport(false)}><div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[88vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="p-6 text-slate-800">
         <div className="flex items-center gap-2 border-b-2 border-blue-700 pb-2 mb-4"><img src="/hydrone-mark.png" alt="Hydrone" className="h-6 w-6 shrink-0" /><div><h2 className="text-lg font-bold">Protocolo de Ensaio</h2><p className="text-xs text-slate-500">{meta.nome || "Sem nome"} · Hydrone</p></div></div>
+        <span className="inline-block text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 mb-3">{categoriaMeta(categoriaAtiva).label}</span>
         {meta.descricao && <><h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Descrição</h3><p className="text-sm mb-3">{meta.descricao}</p></>}
         <table className="w-full text-sm mb-3"><tbody><tr><td className="py-1 pr-3 text-slate-500 w-36">Responsável</td><td className="py-1 font-medium">{meta.responsavel || currentUser.name}</td></tr><tr><td className="py-1 pr-3 text-slate-500">Data</td><td className="py-1 font-medium">{meta.data}</td></tr>{meta.equipamento && <tr><td className="py-1 pr-3 text-slate-500">Equipamento</td><td className="py-1 font-medium">{meta.equipamento}</td></tr>}{meta.local && <tr><td className="py-1 pr-3 text-slate-500">Local</td><td className="py-1 font-medium">{meta.local}</td></tr>}</tbody></table>
         <h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Requisitos marcados</h3>

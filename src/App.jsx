@@ -211,6 +211,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
   const userChip = (<span className="flex items-center gap-1.5 bg-white/15 rounded-full pl-1 pr-3 py-1">{currentUser?.photoURL ? <img src={currentUser.photoURL} alt="" className="w-5 h-5 rounded-full" referrerPolicy="no-referrer" /> : <User size={14} />}<span className="max-w-[8rem] truncate">{currentUser?.name}</span>{isAdmin && <span className="text-[9px] font-bold bg-amber-400 text-blue-950 rounded px-1 leading-tight">ADMIN</span>}</span>);
   const headerActions = (<div className="flex items-center gap-1.5 text-sm flex-wrap">
     {userChip}
+    <button onClick={onSaveClick} disabled={busy || readOnly} title={readOnly ? "Somente leitura" : "Salvar na nuvem"} className="bg-white/15 hover:bg-white/25 disabled:opacity-50 rounded-lg p-2 flex items-center gap-1.5">{readOnly ? <Lock size={15} /> : <Save size={15} />}<span className="hidden sm:inline">Salvar</span></button>
     {deferred && <button onClick={installApp} title="Instalar app" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><DownloadCloud size={15} /></button>}
     <button onClick={() => setShowAnalise(true)} title="Analisar dados (ferramenta opcional)" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><FunctionSquare size={15} /></button>
     <button onClick={() => setShowSaves(true)} title="Experimentos do time" className="bg-white/15 hover:bg-white/25 rounded-lg p-2 relative"><FolderOpen size={15} />{cloudList.length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-blue-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{cloudList.length}</span>}</button>
@@ -243,7 +244,8 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
           </div>
           <nav className="flex gap-1 flex-wrap">
             <button onClick={() => setStep(1)} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition ${step === 1 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${step === 1 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>1</span><ClipboardCheck size={16} /><span className="hidden sm:inline">Sobre o experimento</span></button>
-            <button onClick={() => setStep(2)} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition ${step === 2 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${step === 2 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>2</span><ClipboardList size={16} /><span className="hidden sm:inline">Requisitos do protocolo</span></button>
+            <button onClick={() => setStep(2)} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition ${step === 2 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${step === 2 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>2</span><ClipboardList size={16} /><span className="hidden sm:inline">O que monitorar</span></button>
+            <button onClick={() => setStep(3)} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition ${step === 3 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${step === 3 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>3</span><Table2 size={16} /><span className="hidden sm:inline">Coleta de dados</span></button>
           </nav>
         </div>
       </header>
@@ -294,10 +296,10 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             {(currentExp.editors || []).length > 0 && (<div className="flex flex-wrap gap-1.5 mt-2">{currentExp.editors.map(uid => { const p = profilesList.find(x => x.uid === uid); return (<span key={uid} className="flex items-center gap-1 text-xs bg-blue-50 text-blue-800 rounded-full pl-2 pr-1 py-0.5">{p?.name || uid.slice(0, 6)}<button onClick={() => removeEditor(uid)} className="hover:text-rose-500"><X size={12} /></button></span>); })}</div>)}
           </section>)}
 
-          <button onClick={() => setStep(2)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Próximo: Requisitos do protocolo →</button>
+          <button onClick={() => setStep(2)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Próximo: O que monitorar →</button>
         </div>)}
 
-        {/* TELA 2 — BIBLIOTECA DE REQUISITOS + PLANO GERADO */}
+        {/* TELA 2 — O QUE MONITORAR (só a escolha) */}
         {step === 2 && (<div className="space-y-6">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <button onClick={() => setStep(1)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> Sobre o experimento</button>

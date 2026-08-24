@@ -313,13 +313,6 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             </div>
           </div>
 
-          <section className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm text-slate-700">
-            <p className="flex items-center gap-1.5 font-semibold text-blue-900"><Info size={15} /> Sugestão de ordem em campo</p>
-            <ol className="mt-1.5 list-decimal list-inside space-y-0.5 text-slate-600">
-              {(ORDEM_SUGERIDA[categoriaAtiva] || []).map((o, i) => { const b = blocosAtivos.find(x => x.id === o.bloco); if (!b) return null; return <li key={i}><b className="text-slate-700">{b.titulo}</b> — {o.nota}</li>; })}
-            </ol>
-          </section>
-
           <section>
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-1">Marque o que se aplica</h2>
             <p className="text-xs text-slate-500 mb-3">Cada requisito já vem com uma explicação simples. Toque em "detalhe técnico" para ver o rigor por trás.</p>
@@ -364,17 +357,35 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             {libEditMode && <button onClick={openNewBloco} className="mt-3 text-sm text-blue-700 font-medium flex items-center gap-1"><Plus size={15} /> Novo bloco</button>}
           </section>
 
+          <button onClick={() => setStep(3)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Próximo: Coleta de dados →</button>
+        </div>)}
+
+        {/* TELA 3 — COLETA DE DADOS */}
+        {step === 3 && (<div className="space-y-6">
+          <button onClick={() => setStep(2)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> O que monitorar</button>
+
           {selectedFlat.length === 0 ? (
-            <p className="text-sm text-slate-500 bg-slate-100 rounded-lg p-4">Marque pelo menos um requisito acima para gerar o checklist da sessão e a planilha de campo.</p>
+            <div className="text-center bg-white rounded-xl border border-slate-200 p-8">
+              <ClipboardList size={28} className="text-slate-300 mx-auto mb-2" />
+              <p className="text-sm text-slate-500 mb-4">Você ainda não escolheu o que monitorar. Volte para <b>O que monitorar</b> e marque as variáveis do ensaio.</p>
+              <button onClick={() => setStep(2)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-lg font-medium">Escolher o que monitorar</button>
+            </div>
           ) : (<>
+            <section className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm text-slate-700">
+              <p className="flex items-center gap-1.5 font-semibold text-blue-900"><Info size={15} /> Sugestão de ordem em campo</p>
+              <ol className="mt-1.5 list-decimal list-inside space-y-0.5 text-slate-600">
+                {(ORDEM_SUGERIDA[categoriaAtiva] || []).map((o, i) => { const b = blocosAtivos.find(x => x.id === o.bloco); if (!b) return null; return <li key={i}><b className="text-slate-700">{b.titulo}</b> — {o.nota}</li>; })}
+              </ol>
+            </section>
+
             {sessaoItems.length > 0 && (<section>
               <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><ClipboardCheck size={15} className="text-blue-700" /> Checklist da sessão</h2>
               <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
                 {sessaoItems.map(item => { const v = sessaoValores[item.id] || {}; const cap = CAPTURAS[item.captura] || CAPTURAS.valor; return (
                   <div key={item.id} className="border-b border-slate-100 last:border-0 pb-2 last:pb-0 flex items-center justify-between gap-2 flex-wrap">
                     <span className="text-sm text-slate-800 flex-1 min-w-40">{item.titulo}</span>
-                    {item.captura === "valor" ? (<div className="flex items-center gap-1"><input value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} placeholder="valor" className="w-28 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" />{item.unidade && <span className="text-xs text-slate-400 w-10">{item.unidade}</span>}</div>)
-                      : (<div className="flex gap-1.5">{cap.opcoes.map(op => { const on = v.resultado === op; return <button key={op} onClick={() => setSessaoValor(item.id, { resultado: on ? "" : op })} className={`text-xs px-2.5 py-1 rounded-lg font-medium ${on ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{op}</button>; })}</div>)}
+                    {item.captura === "valor" ? (<div className="flex items-center gap-1"><input disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} placeholder="valor" className="w-28 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />{item.unidade && <span className="text-xs text-slate-400 w-10">{item.unidade}</span>}</div>)
+                      : (<div className="flex gap-1.5">{cap.opcoes.map(op => { const on = v.resultado === op; return <button key={op} disabled={readOnly} onClick={() => setSessaoValor(item.id, { resultado: on ? "" : op })} className={`text-xs px-2.5 py-1 rounded-lg font-medium disabled:opacity-50 ${on ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{op}</button>; })}</div>)}
                   </div>); })}
               </div>
             </section>)}
@@ -382,26 +393,26 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             {ensaioItems.length > 0 && (<section>
               <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                 <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5"><Table2 size={15} className="text-blue-700" /> Planilha de campo</h2>
-                <div className="flex gap-2"><button onClick={addEnsaioRow} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5"><Plus size={15} /> Adicionar ensaio</button>{ensaioRows.length > 0 && <button onClick={exportPlanilha} className="text-sm bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5"><Download size={15} /> Baixar CSV</button>}</div>
+                <div className="flex gap-2">{!readOnly && <button onClick={addEnsaioRow} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5"><Plus size={15} /> Adicionar ensaio</button>}{ensaioRows.length > 0 && <button onClick={exportPlanilha} className="text-sm bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5"><Download size={15} /> Baixar CSV</button>}</div>
               </div>
-              <p className="text-xs text-slate-500 mb-2">Uma linha por ensaio — preencha durante a execução.</p>
+              <p className="text-xs text-slate-500 mb-2">Uma linha por ensaio — preencha quando for possível durante a execução.</p>
               {ensaioRows.length === 0 ? <p className="text-sm text-slate-500 bg-slate-100 rounded-lg p-4">Clique em <b>Adicionar ensaio</b> para começar a preencher.</p> : (
                 <div className="overflow-auto rounded-lg border border-slate-200 max-h-96"><table className="w-full text-sm"><thead className="bg-slate-100 sticky top-0"><tr><th className="px-2 py-2 text-left font-semibold text-slate-500 w-10">#</th>{ensaioItems.map(i => <th key={i.id} className="px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">{i.titulo}{i.unidade ? ` (${i.unidade})` : ""}</th>)}<th className="w-8"></th></tr></thead>
                   <tbody>{ensaioRows.map((r, idx) => (<tr key={idx} className={idx % 2 ? "bg-slate-50" : "bg-white"}>
                     <td className="px-2 py-1 text-slate-400">{idx + 1}</td>
-                    {ensaioItems.map(i => { const cap = CAPTURAS[i.captura] || CAPTURAS.valor; return (<td key={i.id} className="px-1 py-1">{i.captura === "valor" ? (<input value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-2 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent" />) : (<select value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-1 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent"><option value=""></option>{cap.opcoes.map(op => <option key={op} value={op}>{op}</option>)}</select>)}</td>); })}
-                    <td className="px-1"><button onClick={() => delEnsaioRow(idx)} className="text-slate-300 hover:text-rose-500"><Trash2 size={14} /></button></td>
+                    {ensaioItems.map(i => { const cap = CAPTURAS[i.captura] || CAPTURAS.valor; return (<td key={i.id} className="px-1 py-1">{i.captura === "valor" ? (<input disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-2 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent disabled:text-slate-400" />) : (<select disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-1 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent disabled:text-slate-400"><option value=""></option>{cap.opcoes.map(op => <option key={op} value={op}>{op}</option>)}</select>)}</td>); })}
+                    <td className="px-1">{!readOnly && <button onClick={() => delEnsaioRow(idx)} className="text-slate-300 hover:text-rose-500"><Trash2 size={14} /></button>}</td>
                   </tr>))}</tbody></table></div>
               )}
             </section>)}
-          </>)}
 
-          <div className="flex flex-wrap gap-2 pt-2">
-            <button onClick={onSaveClick} disabled={busy || readOnly} title={readOnly ? "Somente leitura" : "Salvar na nuvem"} className="text-sm bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg flex items-center gap-1.5">{readOnly ? <Lock size={15} /> : <Save size={15} />} Salvar</button>
-            <button onClick={() => setShowReport(true)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 py-2 rounded-lg flex items-center gap-1.5"><FileText size={15} /> Gerar relatório (PDF)</button>
-            <button onClick={exportJSON} className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5"><FileJson size={15} className="text-blue-700" /> Exportar (.json)</button>
-            <label className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer"><Upload size={15} className="text-blue-700" /> Importar<input type="file" accept=".json" onChange={importJSON} className="hidden" /></label>
-          </div>
+            <div className="flex flex-wrap gap-2 pt-2">
+              <button onClick={onSaveClick} disabled={busy || readOnly} title={readOnly ? "Somente leitura" : "Salvar na nuvem"} className="text-sm bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg flex items-center gap-1.5">{readOnly ? <Lock size={15} /> : <Save size={15} />} Salvar</button>
+              <button onClick={() => setShowReport(true)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 py-2 rounded-lg flex items-center gap-1.5"><FileText size={15} /> Gerar relatório (PDF)</button>
+              <button onClick={exportJSON} className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5"><FileJson size={15} className="text-blue-700" /> Exportar (.json)</button>
+              <label className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer"><Upload size={15} className="text-blue-700" /> Importar<input type="file" accept=".json" onChange={importJSON} className="hidden" /></label>
+            </div>
+          </>)}
         </div>)}
       </main>
 

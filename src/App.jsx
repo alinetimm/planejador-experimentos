@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import {
-  Waves, Gauge, Rocket, ClipboardList, ClipboardCheck, Download, Upload, Plus, Trash2, Info, BookOpen, ChevronDown,
-  CheckCircle2, User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileJson, FileText,
+  Waves, Gauge, Rocket, ClipboardList, ClipboardCheck, Download, Upload, Plus, Trash2, BookOpen, ChevronDown,
+  User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileJson, FileText,
   DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Table2,
 } from "lucide-react";
 import * as cloud from "./cloud";
@@ -69,6 +69,8 @@ export default function App() {
   const [sessaoValores, setSessaoValores] = useState({});
   const [detalheAbertos, setDetalheAbertos] = useState(() => new Set());
   const [explicacaoAbertos, setExplicacaoAbertos] = useState(() => new Set());
+  const [gruposAlternados, setGruposAlternados] = useState(() => new Set());
+  const [ordemAberta, setOrdemAberta] = useState(false);
   const [libEditMode, setLibEditMode] = useState(false);
   const [itemDraft, setItemDraft] = useState(null);
   const [blocoDraft, setBlocoDraft] = useState(null);
@@ -158,6 +160,8 @@ export default function App() {
   };
   const toggleDetalhe = (id) => setDetalheAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleExplicacao = (id) => setExplicacaoAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleGrupo = (id) => setGruposAlternados(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const grupoAberto = (id, idx, total) => { const padraoAberto = idx === 0 || total <= 4; return gruposAlternados.has(id) ? !padraoAberto : padraoAberto; };
 
   const openNewItem = (blocoId) => setItemDraft({ blocoId, itemId: null, titulo: "", simples: "", gera: "", porque: "", captura: "valor", unidade: "", escopo: "ensaio", modos: [] });
   const openEditItem = (blocoId, item) => setItemDraft({ blocoId, itemId: item.id, modos: [], ...item });
@@ -202,6 +206,15 @@ export default function App() {
   const sessaoItems = selectedFlat.filter(i => i.escopo === "sessao");
   const ensaioItems = selectedFlat.filter(i => i.escopo === "ensaio");
   const blocosComSelecao = blocos.filter(b => selectedFlat.some(i => i.blocoId === b.id));
+
+  const itemVerificado = (item) => { const v = sessaoValores[item.id] || {}; return item.captura === "valor" ? !!(v.valor && v.valor.trim()) : !!v.resultado; };
+  const sessaoPorBloco = useMemo(() => {
+    const map = new Map();
+    sessaoItems.forEach(i => { if (!map.has(i.blocoId)) map.set(i.blocoId, { id: i.blocoId, titulo: i.blocoTitulo, fonte: i.blocoFonte, itens: [] }); map.get(i.blocoId).itens.push(i); });
+    return [...map.values()];
+  }, [sessaoItems]);
+  const sessaoVerificados = sessaoItems.filter(itemVerificado).length;
+  const sessaoFalhas = sessaoItems.filter(i => (sessaoValores[i.id] || {}).resultado === "Falhou").length;
 
   const setSessaoValor = (itemId, patch) => setSessaoValores(v => ({ ...v, [itemId]: { ...(v[itemId] || {}), ...patch } }));
   const addEnsaioRow = () => setEnsaioRows(rs => [...rs, Object.fromEntries(ensaioItems.map(i => [i.id, ""]))]);
@@ -359,19 +372,28 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-1">Marque o que se aplica</h2>
             <p className="text-xs text-slate-500 mb-3">Toque no "?" de um item para ver a explicação; dentro dela, "detalhe técnico" mostra o rigor por trás.</p>
             <div className="space-y-3">
-              {blocosAtivos.map(bloco => {
+              {blocosAtivos.map((bloco, idx) => {
                 const ids = bloco.itens.map(i => i.id);
                 const todos = ids.length > 0 && ids.every(id => selecionados.has(id));
-                const algum = ids.some(id => selecionados.has(id));
+                const marcados = ids.filter(id => selecionados.has(id)).length;
+                const aberto = grupoAberto(bloco.id, idx, blocosAtivos.length);
                 return (<div key={bloco.id} className="bg-white rounded-xl border border-slate-200 p-3">
-                  <div className="flex items-start justify-between gap-2 mb-1">
-                    <button onClick={() => toggleBlocoInteiro(bloco)} className="flex items-start gap-2 text-left flex-1">
-                      <span className={`mt-0.5 w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center ${todos ? "bg-blue-700 border-blue-700" : algum ? "bg-blue-200 border-blue-400" : "border-slate-300"}`}>{todos && <CheckCircle2 size={12} className="text-white" />}</span>
-                      <span><span className="font-bold text-slate-800">{bloco.titulo}</span>{bloco.fonte && <span className="text-[10px] uppercase tracking-wide text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 ml-2">{bloco.fonte}</span>}<div className="text-xs text-slate-500 mt-0.5">{bloco.resumo}</div></span>
+                  <div className="flex items-start justify-between gap-2">
+                    <button onClick={() => toggleGrupo(bloco.id)} className="flex items-start gap-2 text-left flex-1 min-w-0">
+                      <ChevronDown size={15} className={`mt-1 text-slate-400 transition-transform shrink-0 ${aberto ? "rotate-180" : ""}`} />
+                      <span className="min-w-0">
+                        <span className="font-bold text-slate-800">{bloco.titulo}</span>
+                        {bloco.fonte && <span className="text-[10px] uppercase tracking-wide text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 ml-2">{bloco.fonte}</span>}
+                        <span className={`text-xs font-semibold ml-2 ${ids.length > 0 && todos ? "text-emerald-700" : "text-blue-700"}`}>{marcados}/{ids.length}</span>
+                        <div className="text-xs text-slate-500 mt-0.5">{bloco.resumo}</div>
+                      </span>
                     </button>
-                    {libEditMode && <div className="flex gap-1 shrink-0"><button onClick={() => openEditBloco(bloco)} className="text-slate-400 hover:text-blue-600 p-1"><Pencil size={14} /></button><button onClick={() => removeBloco(bloco.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 size={14} /></button></div>}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {ids.length > 0 && <button onClick={e => { e.stopPropagation(); toggleBlocoInteiro(bloco); }} className="text-[11px] font-medium text-blue-700 hover:text-blue-900 px-1.5 py-1 whitespace-nowrap">{todos ? "desmarcar tudo" : "marcar tudo"}</button>}
+                      {libEditMode && <><button onClick={() => openEditBloco(bloco)} className="text-slate-400 hover:text-blue-600 p-1"><Pencil size={14} /></button><button onClick={() => removeBloco(bloco.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 size={14} /></button></>}
+                    </div>
                   </div>
-                  <div className="mt-2 space-y-1.5 pl-6">
+                  {aberto && (<div className="mt-2 space-y-1.5 pl-6">
                     {bloco.itens.map(item => {
                       const marcado = selecionados.has(item.id);
                       return (<ItemCompacto key={item.id} item={item}
@@ -384,7 +406,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
                       />);
                     })}
                     {libEditMode && <button onClick={() => openNewItem(bloco.id)} className="text-xs text-blue-700 font-medium flex items-center gap-1 mt-1"><Plus size={13} /> Novo requisito neste bloco</button>}
-                  </div>
+                  </div>)}
                 </div>);
               })}
             </div>
@@ -408,24 +430,51 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
               <button onClick={() => setStep(2)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-lg font-medium">Escolher o que monitorar</button>
             </div>
           ) : (<>
-            <section className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm text-slate-700">
-              <p className="flex items-center gap-1.5 font-semibold text-blue-900"><Info size={15} /> Sugestão de ordem em campo</p>
-              <ol className="mt-1.5 list-decimal list-inside space-y-0.5 text-slate-600">
+            {sessaoItems.length > 0 && (<section className="bg-white rounded-xl border border-slate-200 p-3">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="text-sm font-semibold text-slate-700">Prontidão</span>
+                <span className={`text-sm font-bold flex items-center gap-1.5 ${sessaoFalhas > 0 ? "text-rose-600" : "text-slate-700"}`}>
+                  Verificado: {sessaoVerificados}/{sessaoItems.length}
+                  {sessaoFalhas > 0 && <span className="flex items-center gap-1"><AlertTriangle size={13} /> {sessaoFalhas} {sessaoFalhas === 1 ? "falhou" : "falharam"}</span>}
+                </span>
+              </div>
+              <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                <div className={`h-full rounded-full transition-all ${sessaoFalhas > 0 ? "bg-rose-500" : "bg-blue-600"}`} style={{ width: `${sessaoItems.length ? Math.round(sessaoVerificados / sessaoItems.length * 100) : 0}%` }} />
+              </div>
+            </section>)}
+
+            <section className="bg-blue-50 border border-blue-100 rounded-lg">
+              <button onClick={() => setOrdemAberta(v => !v)} className="w-full flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-blue-900 text-left">
+                <span className="w-3 inline-block">{ordemAberta ? "▾" : "▸"}</span> Sugestão de ordem em campo
+              </button>
+              {ordemAberta && (<ol className="px-3 pb-3 -mt-1 list-decimal list-inside space-y-0.5 text-sm text-slate-600">
                 {(ORDEM_SUGERIDA[categoriaAtiva] || []).map((o, i) => { const b = blocosAtivos.find(x => x.id === o.bloco); if (!b) return null; return <li key={i}><b className="text-slate-700">{b.titulo}</b> — {o.nota}</li>; })}
-              </ol>
+              </ol>)}
             </section>
 
             {sessaoItems.length > 0 && (<section>
               <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><ClipboardCheck size={15} className="text-blue-700" /> Checklist da sessão</h2>
-              <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-1.5">
-                {sessaoItems.map(item => { const v = sessaoValores[item.id] || {}; const cap = CAPTURAS[item.captura] || CAPTURAS.valor; return (
-                  <ItemCompacto key={item.id} item={item}
-                    aberto={explicacaoAbertos.has(item.id)} tecAberto={detalheAbertos.has(item.id)}
-                    onToggleExplicacao={() => toggleExplicacao(item.id)} onToggleDetalhe={() => toggleDetalhe(item.id)}
-                    className="border-slate-100"
-                    right={item.captura === "valor" ? (<div className="flex items-center gap-1" onClick={e => e.stopPropagation()}><input disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} placeholder="valor" className="w-24 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />{item.unidade && <span className="text-xs text-slate-400 w-8">{item.unidade}</span>}</div>)
-                      : (<div className="flex gap-1" onClick={e => e.stopPropagation()}>{cap.opcoes.map(op => { const on = v.resultado === op; return <button key={op} disabled={readOnly} onClick={() => setSessaoValor(item.id, { resultado: on ? "" : op })} className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 ${on ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{op}</button>; })}</div>)}
-                  />); })}
+              <div className="space-y-3">
+                {sessaoPorBloco.map((grupo, idx) => {
+                  const verificados = grupo.itens.filter(itemVerificado).length;
+                  const aberto = grupoAberto(grupo.id, idx, sessaoPorBloco.length);
+                  return (<div key={grupo.id} className="bg-white rounded-xl border border-slate-200 p-3">
+                    <button onClick={() => toggleGrupo(grupo.id)} className="w-full flex items-center justify-between gap-2 text-left">
+                      <span className="flex items-center gap-2 min-w-0"><ChevronDown size={15} className={`text-slate-400 transition-transform shrink-0 ${aberto ? "rotate-180" : ""}`} /><span className="font-bold text-slate-800 truncate">{grupo.titulo}</span>{grupo.fonte && <span className="text-[10px] uppercase tracking-wide text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 shrink-0">{grupo.fonte}</span>}</span>
+                      <span className={`text-xs font-semibold shrink-0 ${verificados === grupo.itens.length ? "text-emerald-700" : "text-slate-500"}`}>{verificados}/{grupo.itens.length}</span>
+                    </button>
+                    {aberto && (<div className="mt-2 space-y-1.5">
+                      {grupo.itens.map(item => { const v = sessaoValores[item.id] || {}; const cap = CAPTURAS[item.captura] || CAPTURAS.valor; return (
+                        <ItemCompacto key={item.id} item={item}
+                          aberto={explicacaoAbertos.has(item.id)} tecAberto={detalheAbertos.has(item.id)}
+                          onToggleExplicacao={() => toggleExplicacao(item.id)} onToggleDetalhe={() => toggleDetalhe(item.id)}
+                          className={v.resultado === "Falhou" ? "border-rose-200 bg-rose-50/50" : "border-slate-100"}
+                          right={item.captura === "valor" ? (<div className="flex items-center gap-1" onClick={e => e.stopPropagation()}><input disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} placeholder="valor" className="w-24 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />{item.unidade && <span className="text-xs text-slate-400 w-8">{item.unidade}</span>}</div>)
+                            : (<div className="flex gap-1" onClick={e => e.stopPropagation()}>{cap.opcoes.map(op => { const on = v.resultado === op; return <button key={op} disabled={readOnly} onClick={() => setSessaoValor(item.id, { resultado: on ? "" : op })} className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 ${on ? (op === "Falhou" ? "bg-rose-600 text-white" : "bg-blue-700 text-white") : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{op}</button>; })}</div>)}
+                        />); })}
+                    </div>)}
+                  </div>);
+                })}
               </div>
             </section>)}
 

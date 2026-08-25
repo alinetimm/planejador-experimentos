@@ -338,9 +338,9 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             {headerActions}
           </div>
           <nav className="flex gap-1 flex-wrap">
-            <button onClick={() => setStep(1)} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition ${step === 1 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${step === 1 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>1</span><ClipboardCheck size={16} /><span className="hidden sm:inline">Sobre o experimento</span></button>
-            <button onClick={() => setStep(2)} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition ${step === 2 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${step === 2 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>2</span><ClipboardList size={16} /><span className="hidden sm:inline">O que monitorar</span></button>
-            <button onClick={() => setStep(3)} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition ${step === 3 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${step === 3 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>3</span><Table2 size={16} /><span className="hidden sm:inline">Coleta de dados</span></button>
+            <button onClick={() => setStep(1)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 1 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 1 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>1</span><ClipboardCheck size={16} /><span>Sobre</span></button>
+            <button onClick={() => setStep(2)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 2 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 2 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>2</span><ClipboardList size={16} /><span>Montar checklist</span></button>
+            <button onClick={() => setStep(3)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 3 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 3 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>3</span><Table2 size={16} /><span>Preencher checklist</span></button>
           </nav>
         </div>
       </header>
@@ -400,7 +400,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             {(currentExp.editors || []).length > 0 && (<div className="flex flex-wrap gap-1.5 mt-2">{currentExp.editors.map(uid => { const p = profilesList.find(x => x.uid === uid); return (<span key={uid} className="flex items-center gap-1 text-xs bg-blue-50 text-blue-800 rounded-full pl-2 pr-1 py-0.5">{p?.name || uid.slice(0, 6)}<button onClick={() => removeEditor(uid)} className="hover:text-rose-500"><X size={12} /></button></span>); })}</div>)}
           </section>)}
 
-          <button onClick={() => setStep(2)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Próximo: O que monitorar →</button>
+          <button onClick={() => setStep(2)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Próximo: Montar checklist →</button>
         </div>)}
 
         {/* TELA 2 — O QUE MONITORAR (só a escolha) */}
@@ -419,8 +419,8 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
           </div>
 
           <section>
-            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-1">Marque o que se aplica</h2>
-            <p className="text-xs text-slate-500 mb-3">Toque no "?" de um item para ver a explicação; dentro dela, "detalhe técnico" mostra o rigor por trás.</p>
+            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-1">Montar o checklist</h2>
+            <p className="text-xs text-slate-500 mb-3">Marque o que vai entrar no checklist deste experimento — você preenche os resultados na próxima tela, durante o ensaio. Toque no "?" de um item para ver a explicação; dentro dela, "detalhe técnico" mostra o rigor por trás.</p>
             <div className="space-y-3">
               {blocosAtivos.map((bloco, idx) => {
                 const ids = bloco.itens.map(i => i.id);
@@ -463,21 +463,21 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             {libEditMode && <button onClick={openNewBloco} className="mt-3 text-sm text-blue-700 font-medium flex items-center gap-1"><Plus size={15} /> Novo bloco</button>}
           </section>
 
-          <button onClick={() => setStep(3)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Próximo: Coleta de dados →</button>
+          <button onClick={() => setStep(3)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Próximo: Preencher checklist →</button>
         </div>)}
 
         {/* TELA 3 — COLETA DE DADOS */}
         {step === 3 && (<div className="space-y-6">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <button onClick={() => setStep(2)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> O que monitorar</button>
+            <button onClick={() => setStep(2)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> Montar checklist</button>
             <button onClick={() => setStep(1)} title="Trocar modo do ensaio" className="text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-full px-2.5 py-1">{modoMeta(meta.modoEnsaio).label}</button>
           </div>
 
           {selectedFlat.length === 0 ? (
             <div className="text-center bg-white rounded-xl border border-slate-200 p-8">
               <ClipboardList size={28} className="text-slate-300 mx-auto mb-2" />
-              <p className="text-sm text-slate-500 mb-4">Você ainda não escolheu o que monitorar. Volte para <b>O que monitorar</b> e marque as variáveis do ensaio.</p>
-              <button onClick={() => setStep(2)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-lg font-medium">Escolher o que monitorar</button>
+              <p className="text-sm text-slate-500 mb-4">Você ainda não montou o checklist deste experimento. Volte para <b>Montar checklist</b> e marque as variáveis do ensaio.</p>
+              <button onClick={() => setStep(2)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-lg font-medium">Montar o checklist</button>
             </div>
           ) : (<>
             {sessaoItems.length > 0 && (<section className="bg-white rounded-xl border border-slate-200 p-3">
@@ -503,7 +503,8 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             </section>
 
             {sessaoItems.length > 0 && (<section>
-              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><ClipboardCheck size={15} className="text-blue-700" /> Checklist da sessão</h2>
+              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><ClipboardCheck size={15} className="text-blue-700" /> Preencher o checklist</h2>
+              <p className="text-xs text-slate-500 -mt-1.5 mb-2">Preencha aqui, durante o ensaio.</p>
               <div className="space-y-3">
                 {sessaoPorBloco.map((grupo, idx) => {
                   const verificados = grupo.itens.filter(itemVerificado).length;

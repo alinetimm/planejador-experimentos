@@ -10,10 +10,13 @@ import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORD
 import AnalisarDados from "./AnalisarDados";
 
 const today = () => new Date().toISOString().slice(0, 10);
-const META_DEF = { nome: "", descricao: "", responsavel: "", data: today(), equipamento: "", local: "", notas: "" };
+const META_DEF = { nome: "", descricao: "", responsavel: "", data: today(), equipamento: "", local: "", notas: "", modoEnsaio: "os_dois" };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const ICONES_CATEGORIA = { Waves, Gauge, Rocket };
 const categoriaMeta = (id) => CATEGORIAS.find(c => c.id === id) || CATEGORIAS[0];
+const MODOS_ENSAIO = [{ id: "voo", label: "Voo" }, { id: "sub", label: "Subaquático" }, { id: "os_dois", label: "Os dois" }];
+const modoMeta = (id) => MODOS_ENSAIO.find(m => m.id === id) || MODOS_ENSAIO[2];
+const itemAplicaAoModo = (item, modo) => modo === "os_dois" || !(item.modos && item.modos.length) || item.modos.includes(modo);
 
 // Linha compacta de um item: [left] título [right] "?" — explicação simples fica escondida
 // atrás do "?"; "detalhe técnico" é um nível a mais dentro do painel que o "?" abre.
@@ -156,8 +159,9 @@ export default function App() {
   const toggleDetalhe = (id) => setDetalheAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleExplicacao = (id) => setExplicacaoAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const openNewItem = (blocoId) => setItemDraft({ blocoId, itemId: null, titulo: "", simples: "", gera: "", porque: "", captura: "valor", unidade: "", escopo: "ensaio" });
-  const openEditItem = (blocoId, item) => setItemDraft({ blocoId, itemId: item.id, ...item });
+  const openNewItem = (blocoId) => setItemDraft({ blocoId, itemId: null, titulo: "", simples: "", gera: "", porque: "", captura: "valor", unidade: "", escopo: "ensaio", modos: [] });
+  const openEditItem = (blocoId, item) => setItemDraft({ blocoId, itemId: item.id, modos: [], ...item });
+  const toggleModoDraft = (modo) => setItemDraft(d => { const cur = d.modos || []; return { ...d, modos: cur.includes(modo) ? cur.filter(m => m !== modo) : [...cur, modo] }; });
   const saveItemDraft = () => {
     if (!itemDraft.titulo.trim()) { flash("Dê um título ao requisito"); return; }
     const { blocoId, itemId, ...campos } = itemDraft;
@@ -192,7 +196,8 @@ export default function App() {
   const restaurarPadrao = () => { if (!window.confirm("Restaurar a biblioteca de requisitos para o padrão? Seus itens e blocos personalizados serão perdidos.")) return; setBlocos(resetBlocos()); flash("Biblioteca restaurada"); };
 
   // ── Plano gerado a partir do que foi marcado, sempre restrito à categoria ativa ──
-  const blocosAtivos = useMemo(() => blocos.filter(b => (b.categoria || CATEGORIA_PADRAO) === categoriaAtiva), [blocos, categoriaAtiva]);
+  const blocosAtivos = useMemo(() => blocos.filter(b => (b.categoria || CATEGORIA_PADRAO) === categoriaAtiva)
+    .map(b => ({ ...b, itens: b.itens.filter(i => itemAplicaAoModo(i, meta.modoEnsaio)) })), [blocos, categoriaAtiva, meta.modoEnsaio]);
   const selectedFlat = useMemo(() => blocosAtivos.flatMap(b => b.itens.filter(i => selecionados.has(i.id)).map(i => ({ ...i, blocoId: b.id, blocoTitulo: b.titulo, blocoFonte: b.fonte }))), [blocosAtivos, selecionados]);
   const sessaoItems = selectedFlat.filter(i => i.escopo === "sessao");
   const ensaioItems = selectedFlat.filter(i => i.escopo === "ensaio");
@@ -301,6 +306,15 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
           </section>
 
           <section className="bg-white rounded-xl border border-slate-200 p-4">
+            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Modo do ensaio</h2>
+            <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50">
+              {MODOS_ENSAIO.map(m => (<button key={m.id} onClick={() => setMeta({ ...meta, modoEnsaio: m.id })}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${meta.modoEnsaio === m.id ? "bg-blue-700 text-white shadow" : "text-slate-600 hover:bg-slate-100"}`}>{m.label}</button>))}
+            </div>
+            <p className="text-xs text-slate-500 mt-2">Esconde, nas próximas telas, o que não se aplica ao modo escolhido. Itens sem modo específico continuam aparecendo sempre.</p>
+          </section>
+
+          <section className="bg-white rounded-xl border border-slate-200 p-4">
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Waves size={15} className="text-blue-700" /> Sobre o experimento</h2>
             <label className="text-xs text-slate-500 font-medium">Nome do experimento</label>
             <input value={meta.nome} onChange={e => setMeta({ ...meta, nome: e.target.value })} placeholder="ex.: Resposta do casco ao pouso — série 1" className="w-full mt-1 mb-3 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" />
@@ -335,6 +349,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
                 {(() => { const Icone = ICONES_CATEGORIA[categoriaMeta(categoriaAtiva).icone] || Waves; return <Icone size={12} />; })()}
                 {categoriaMeta(categoriaAtiva).label}
               </span>
+              <button onClick={() => setStep(1)} title="Trocar modo do ensaio" className="text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-full px-2.5 py-1">{modoMeta(meta.modoEnsaio).label}</button>
               <button onClick={() => setLibEditMode(v => !v)} className={`text-sm px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 ${libEditMode ? "bg-blue-700 text-white" : "bg-white border border-slate-200 text-slate-600"}`}><Pencil size={14} /> {libEditMode ? "Concluir edição" : "Editar biblioteca"}</button>
               {libEditMode && <button onClick={restaurarPadrao} className="text-sm px-3 py-1.5 rounded-lg font-medium bg-white border border-slate-200 text-slate-600 flex items-center gap-1.5"><RotateCcw size={14} /> Restaurar padrão</button>}
             </div>
@@ -381,7 +396,10 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
 
         {/* TELA 3 — COLETA DE DADOS */}
         {step === 3 && (<div className="space-y-6">
-          <button onClick={() => setStep(2)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> O que monitorar</button>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <button onClick={() => setStep(2)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> O que monitorar</button>
+            <button onClick={() => setStep(1)} title="Trocar modo do ensaio" className="text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-full px-2.5 py-1">{modoMeta(meta.modoEnsaio).label}</button>
+          </div>
 
           {selectedFlat.length === 0 ? (
             <div className="text-center bg-white rounded-xl border border-slate-200 p-8">
@@ -449,6 +467,14 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
             <div><label className="text-xs text-slate-500 font-medium">Captura</label><select value={itemDraft.captura} onChange={e => setItemDraft({ ...itemDraft, captura: e.target.value })} className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400">{Object.entries(CAPTURAS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></div>
             <div><label className="text-xs text-slate-500 font-medium">Unidade</label><input value={itemDraft.unidade} onChange={e => setItemDraft({ ...itemDraft, unidade: e.target.value })} placeholder="ex.: m/s" className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" /></div>
             <div><label className="text-xs text-slate-500 font-medium">Escopo</label><select value={itemDraft.escopo} onChange={e => setItemDraft({ ...itemDraft, escopo: e.target.value })} className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400"><option value="ensaio">Por ensaio (planilha)</option><option value="sessao">Da sessão (uma vez)</option></select></div>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 font-medium">Modo do ensaio</label>
+            <div className="flex gap-3 mt-1 text-sm text-slate-700">
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={(itemDraft.modos || []).includes("voo")} onChange={() => toggleModoDraft("voo")} /> Só voo</label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={(itemDraft.modos || []).includes("sub")} onChange={() => toggleModoDraft("sub")} /> Só subaquático</label>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1">Sem marcar nada, o item aparece em qualquer modo.</p>
           </div>
         </div>
         <div className="flex gap-2 mt-4"><button onClick={() => setItemDraft(null)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={saveItemDraft} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white font-semibold">Salvar</button></div>

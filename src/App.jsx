@@ -227,22 +227,72 @@ export default function App() {
   };
 
   // ── Relatório (PDF) ──
+  // Folha de campo: mesma seleção da Tela 3, em formato pra imprimir e preencher à mão.
+  // Item já preenchido no app sai impresso com o valor; vazio sai como caixa/linha em branco —
+  // então imprimir antes do ensaio dá uma folha em branco, e depois, um registro preenchido.
   const buildReportHTML = () => {
+    const ordemIds = (ORDEM_SUGERIDA[categoriaAtiva] || []).map(o => o.bloco).filter(id => blocosComSelecao.some(b => b.id === id));
+    const restantes = blocosComSelecao.map(b => b.id).filter(id => !ordemIds.includes(id));
     const ordem = (ORDEM_SUGERIDA[categoriaAtiva] || []).filter(o => blocosComSelecao.some(b => b.id === o.bloco))
       .map(o => { const b = blocos.find(x => x.id === o.bloco); return `<li><b>${esc(b?.titulo || o.bloco)}</b> — ${esc(o.nota)}</li>`; }).join("");
-    const requisitosHTML = blocosComSelecao.map(b => {
-      const itens = selectedFlat.filter(i => i.blocoId === b.id);
-      return `<h3 style="font-size:13px;color:#334155;margin:14px 0 4px">${esc(b.titulo)}${b.fonte ? ` <span style="font-weight:400;color:#94a3b8;font-size:11px">· ${esc(b.fonte)}</span>` : ""}</h3><ul style="margin:0 0 8px;padding-left:18px">${itens.map(i => `<li style="margin-bottom:6px"><b>${esc(i.titulo)}</b> — ${esc(i.simples)}<br><span style="color:#64748b;font-size:11px">Por que isso é importante: ${esc(i.porque)}</span></li>`).join("")}</ul>`;
+
+    const linhaChecklist = (item) => {
+      const v = sessaoValores[item.id] || {};
+      if (item.captura === "valor") {
+        return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-line">${v.valor ? esc(v.valor) : ""}</span>${item.unidade ? `<span class="fs-unidade">${esc(item.unidade)}</span>` : ""}</div>`;
+      }
+      const cap = CAPTURAS[item.captura] || CAPTURAS.status;
+      const opcoes = cap.opcoes.map(op => `<span class="fs-check">${v.resultado === op ? "☑" : "☐"} ${esc(op)}</span>`).join("");
+      return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-opcoes">${opcoes}</span></div><div class="fs-obs">Obs.: <span class="fs-line-obs"></span></div>`;
+    };
+    const gruposHTML = [...ordemIds, ...restantes].map(id => {
+      const b = blocosComSelecao.find(x => x.id === id);
+      const itensSessao = selectedFlat.filter(i => i.blocoId === id && i.escopo === "sessao");
+      if (!b || !itensSessao.length) return "";
+      return `<div class="fs-grupo"><h3>${esc(b.titulo)}${b.fonte ? ` <span class="fs-fonte">· ${esc(b.fonte)}</span>` : ""}</h3>${itensSessao.map(linhaChecklist).join("")}</div>`;
     }).join("");
-    const sessaoHTML = sessaoItems.length ? `<h2>Checklist da sessão</h2><table><tr><th>Item</th><th>Resultado</th></tr>${sessaoItems.map(i => { const v = sessaoValores[i.id] || {}; const val = i.captura === "valor" ? (v.valor || "—") : (v.resultado || "—"); return `<tr><td>${esc(i.titulo)}</td><td>${esc(val)}${i.unidade && v.valor ? " " + esc(i.unidade) : ""}</td></tr>`; }).join("")}</table>` : "";
-    const planilhaHTML = ensaioItems.length && ensaioRows.length ? `<h2>Planilha de campo</h2><table><tr><th>#</th>${ensaioItems.map(i => `<th>${esc(i.titulo)}${i.unidade ? ` (${esc(i.unidade)})` : ""}</th>`).join("")}</tr>${ensaioRows.map((r, idx) => `<tr><td>${idx + 1}</td>${ensaioItems.map(i => `<td>${esc(r[i.id] ?? "")}</td>`).join("")}</tr>`).join("")}</table>` : "";
-    return `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Protocolo de Ensaio — Hydrone</title><style>body{font-family:Arial,sans-serif;color:#1e293b;max-width:760px;margin:24px auto;padding:0 24px}h1{font-size:20px;color:#1e40af;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px}.sub{font-size:12px;color:#64748b;margin:0 0 16px}h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#1e40af;margin:20px 0 6px}table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0}td,th{text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0}.meta td:first-child{color:#64748b;width:160px}p{font-size:13px;line-height:1.5;margin:4px 0}ul{font-size:13px;color:#334155}.foot{font-size:11px;color:#94a3b8;margin-top:24px;border-top:1px solid #e2e8f0;padding-top:8px}.cat-badge{display:inline-block;font-size:11px;font-weight:700;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:2px 8px;margin:2px 0 14px}@media print{body{margin:0}}</style></head><body>
-<div style="display:flex;align-items:center;gap:10px;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px"><img src="/hydrone-mark.png" alt="Hydrone" style="height:34px;width:34px"><h1 style="border:0;margin:0;padding:0">Protocolo de Ensaio</h1></div><p class="sub">${esc(meta.nome || "Sem nome")} · Planejador de Experimentos Hydrone</p><span class="cat-badge">${esc(categoriaMeta(categoriaAtiva).label)}</span>
+
+    const TARGET_ROWS = 10;
+    const linhasExtra = Math.max(0, TARGET_ROWS - ensaioRows.length);
+    const planilhaHTML = ensaioItems.length ? `<h2>Planilha de campo</h2><table class="fs-tabela"><tr><th>#</th>${ensaioItems.map(i => `<th>${esc(i.titulo)}${i.unidade ? ` (${esc(i.unidade)})` : ""}</th>`).join("")}</tr>${[
+      ...ensaioRows.map((r, idx) => `<tr><td>${idx + 1}</td>${ensaioItems.map(i => `<td>${esc(r[i.id] ?? "")}</td>`).join("")}</tr>`),
+      ...Array.from({ length: linhasExtra }).map((_, k) => `<tr><td>${ensaioRows.length + k + 1}</td>${ensaioItems.map(() => `<td></td>`).join("")}</tr>`),
+    ].join("")}</table>` : "";
+
+    return `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Folha de Campo — Hydrone</title><style>
+@page{size:A4;margin:14mm}
+body{font-family:Arial,sans-serif;color:#1e293b;max-width:760px;margin:24px auto;padding:0 24px}
+h1{font-size:20px;color:#1e40af;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px}
+.sub{font-size:12px;color:#64748b;margin:0 0 10px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#1e40af;margin:20px 0 6px;page-break-after:avoid}
+table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0}
+td,th{text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0}
+.meta td:first-child{color:#64748b;width:160px}
+p{font-size:13px;line-height:1.5;margin:4px 0}
+.foot{font-size:11px;color:#94a3b8;margin-top:24px;border-top:1px solid #e2e8f0;padding-top:8px}
+.cat-badge{display:inline-block;font-size:11px;font-weight:700;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:2px 8px;margin:2px 4px 14px 0}
+.fs-grupo{margin:12px 0;page-break-inside:avoid}
+.fs-grupo h3{font-size:12px;color:#1e40af;margin:0 0 4px;border-bottom:1px solid #dbeafe;padding-bottom:2px}
+.fs-fonte{font-weight:400;color:#94a3b8;font-size:10px}
+.fs-item{display:flex;align-items:baseline;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px dotted #e2e8f0}
+.fs-label{flex:1}
+.fs-line{flex:0 0 140px;border-bottom:1px solid #94a3b8;min-height:14px}
+.fs-unidade{color:#94a3b8;font-size:10px;width:26px}
+.fs-opcoes{font-size:11px;color:#334155;white-space:nowrap}
+.fs-check{margin-left:10px}
+.fs-obs{font-size:10px;color:#94a3b8;padding:0 0 5px;display:flex;align-items:center;gap:6px}
+.fs-line-obs{flex:1;border-bottom:1px dotted #cbd5e1;min-height:12px}
+.fs-tabela td{height:22px}
+.fs-tabela{page-break-inside:auto}
+.fs-tabela tr{page-break-inside:avoid}
+@media print{body{margin:0}}
+</style></head><body>
+<div style="display:flex;align-items:center;gap:10px;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px"><img src="/hydrone-mark.png" alt="Hydrone" style="height:34px;width:34px"><h1 style="border:0;margin:0;padding:0">Folha de Campo</h1></div><p class="sub">${esc(meta.nome || "Sem nome")} · Planejador de Experimentos Hydrone</p><span class="cat-badge">${esc(categoriaMeta(categoriaAtiva).label)}</span><span class="cat-badge">Modo: ${esc(modoMeta(meta.modoEnsaio).label)}</span>
 ${meta.descricao ? `<h2>Descrição</h2><p>${esc(meta.descricao)}</p>` : ""}
-<table class="meta"><tr><td>Responsável</td><td>${esc(meta.responsavel || currentUser?.name || "")}</td></tr><tr><td>Data</td><td>${esc(meta.data)}</td></tr>${meta.equipamento ? `<tr><td>Equipamento</td><td>${esc(meta.equipamento)}</td></tr>` : ""}${meta.local ? `<tr><td>Local</td><td>${esc(meta.local)}</td></tr>` : ""}</table>
+<table class="meta"><tr><td>Responsável</td><td>${esc(meta.responsavel || currentUser?.name || "")}</td></tr><tr><td>Data</td><td>${esc(meta.data)}</td></tr>${meta.equipamento ? `<tr><td>Equipamento</td><td>${esc(meta.equipamento)}</td></tr>` : ""}${meta.local ? `<tr><td>Local</td><td>${esc(meta.local)}</td></tr>` : ""}<tr><td>Ensaio nº</td><td class="fs-line" style="display:inline-block;width:140px"></td></tr></table>
 ${ordem ? `<h2>Sugestão de ordem em campo</h2><ol style="font-size:13px;padding-left:18px">${ordem}</ol>` : ""}
-<h2>Requisitos marcados</h2>${requisitosHTML || "<p>Nenhum requisito marcado.</p>"}
-${sessaoHTML}${planilhaHTML}
+<h2>Checklist</h2>${gruposHTML || "<p>Nenhum requisito marcado.</p>"}
+${planilhaHTML}
 ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
 <p class="foot">Gerado em ${esc(new Date().toLocaleString("pt-BR"))}</p></body></html>`;
   };
@@ -496,7 +546,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
 
             <div className="flex flex-wrap gap-2 pt-2">
               <button onClick={onSaveClick} disabled={busy || readOnly} title={readOnly ? "Somente leitura" : "Salvar na nuvem"} className="text-sm bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg flex items-center gap-1.5">{readOnly ? <Lock size={15} /> : <Save size={15} />} Salvar</button>
-              <button onClick={() => setShowReport(true)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 py-2 rounded-lg flex items-center gap-1.5"><FileText size={15} /> Gerar relatório (PDF)</button>
+              <button onClick={() => setShowReport(true)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 py-2 rounded-lg flex items-center gap-1.5"><FileText size={15} /> Baixar folha de campo (PDF)</button>
               <button onClick={exportJSON} className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5"><FileJson size={15} className="text-blue-700" /> Exportar (.json)</button>
               <label className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer"><Upload size={15} className="text-blue-700" /> Importar<input type="file" accept=".json" onChange={importJSON} className="hidden" /></label>
             </div>
@@ -558,8 +608,9 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
       {showSaveDlg && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaveDlg(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}><h3 className="font-bold text-slate-800 mb-1">Salvar experimento</h3><p className="text-xs text-slate-500 mb-3">Dê um nome para salvar na nuvem do time.</p><input value={saveTitle} onChange={e => setSaveTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && persist(saveTitle)} placeholder="Nome do experimento" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" autoFocus /><div className="flex gap-2 mt-4"><button onClick={() => setShowSaveDlg(false)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={() => persist(saveTitle)} disabled={busy} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold">Salvar</button></div></div></div>)}
 
       {showReport && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowReport(false)}><div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[88vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="p-6 text-slate-800">
-        <div className="flex items-center gap-2 border-b-2 border-blue-700 pb-2 mb-4"><img src="/hydrone-mark.png" alt="Hydrone" className="h-6 w-6 shrink-0" /><div><h2 className="text-lg font-bold">Protocolo de Ensaio</h2><p className="text-xs text-slate-500">{meta.nome || "Sem nome"} · Hydrone</p></div></div>
-        <span className="inline-block text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 mb-3">{categoriaMeta(categoriaAtiva).label}</span>
+        <div className="flex items-center gap-2 border-b-2 border-blue-700 pb-2 mb-4"><img src="/hydrone-mark.png" alt="Hydrone" className="h-6 w-6 shrink-0" /><div><h2 className="text-lg font-bold">Folha de Campo</h2><p className="text-xs text-slate-500">{meta.nome || "Sem nome"} · Hydrone</p></div></div>
+        <span className="inline-block text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 mb-3 mr-1.5">{categoriaMeta(categoriaAtiva).label}</span>
+        <span className="inline-block text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 mb-3">Modo: {modoMeta(meta.modoEnsaio).label}</span>
         {meta.descricao && <><h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Descrição</h3><p className="text-sm mb-3">{meta.descricao}</p></>}
         <table className="w-full text-sm mb-3"><tbody><tr><td className="py-1 pr-3 text-slate-500 w-36">Responsável</td><td className="py-1 font-medium">{meta.responsavel || currentUser.name}</td></tr><tr><td className="py-1 pr-3 text-slate-500">Data</td><td className="py-1 font-medium">{meta.data}</td></tr>{meta.equipamento && <tr><td className="py-1 pr-3 text-slate-500">Equipamento</td><td className="py-1 font-medium">{meta.equipamento}</td></tr>}{meta.local && <tr><td className="py-1 pr-3 text-slate-500">Local</td><td className="py-1 font-medium">{meta.local}</td></tr>}</tbody></table>
         <h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Requisitos marcados</h3>

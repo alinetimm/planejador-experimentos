@@ -41,8 +41,8 @@ export const CATEGORIA_PADRAO = "manobra";
 let _iid = 0;
 const uid = () => `r${Date.now().toString(36)}${(_iid++).toString(36)}`;
 
-const it = (id, titulo, simples, gera, porque, captura, escopo, unidade = "") =>
-  ({ id, titulo, simples, gera, porque, captura, escopo, unidade });
+const it = (id, titulo, simples, gera, porque, captura, escopo, unidade = "", modos) =>
+  ({ id, titulo, simples, gera, porque, captura, escopo, unidade, ...(modos ? { modos } : {}) });
 
 export const BLOCOS_PADRAO = [
   {
@@ -115,7 +115,7 @@ export const BLOCOS_PADRAO = [
         "Registre até onde o casco afundou logo depois do pouso e como essa profundidade volta ao normal com o tempo.",
         "Série temporal de profundidade (m) desde o instante de contato até a estabilização.",
         "Mostra a resposta de flutuabilidade do casco, complementar à aceleração — um afundamento maior nem sempre corresponde a mais aceleração.",
-        "valor", "ensaio", "m"),
+        "valor", "ensaio", "m", ["sub"]),
       it("C3", "Oscilação do casco após o impacto",
         "Registre o quanto o casco balança de um lado para o outro (roll) e para frente/trás (pitch) depois do pouso, até parar de balançar.",
         "Amplitude de roll/pitch (°) ao longo do tempo pós-impacto.",
@@ -253,9 +253,9 @@ export const BLOCOS_PADRAO = [
       it("MEC1", "Parafusos e juntas dos braços apertados", "Aperte à mão os parafusos dos braços; se algum estiver frouxo, o veículo pode vibrar ou até se soltar em operação.",
         "Verificação de torque/aperto das juntas estruturais.", "Folga estrutural altera a resposta dinâmica do veículo e pode evoluir para falha mecânica.", "status", "sessao"),
       it("MEC2", "Hélices aéreas sem danos ou folga", "Olhe e sinta as hélices aéreas: rachaduras ou folga no encaixe derrubam o desempenho e podem ser perigosas.",
-        "Inspeção visual/tátil das hélices aéreas.", "Uma hélice danificada pode se romper em operação e desbalancear o veículo.", "status", "sessao"),
+        "Inspeção visual/tátil das hélices aéreas.", "Uma hélice danificada pode se romper em operação e desbalancear o veículo.", "status", "sessao", "", ["voo"]),
       it("MEC3", "Hélices subaquáticas sem danos ou folga", "Mesma checagem, mas nas hélices que giram dentro d'água.",
-        "Inspeção visual/tátil das hélices subaquáticas.", "Danos nesse conjunto afetam empuxo e podem gerar vibração transmitida ao casco.", "status", "sessao"),
+        "Inspeção visual/tátil das hélices subaquáticas.", "Danos nesse conjunto afetam empuxo e podem gerar vibração transmitida ao casco.", "status", "sessao", "", ["sub"]),
       it("MEC4", "Mecanismo de dobramento funcional (se aplicável)", "Se o veículo tem braços que dobram, teste se dobram e travam direito antes do ensaio.",
         "Teste funcional do mecanismo de dobra.", "Uma trava que falha em voo/mergulho muda a geometria do veículo de forma imprevista.", "status", "sessao"),
       it("MEC5", "Material de flutuação (espuma) íntegro", "Verifique se a espuma que ajuda o veículo a boiar não está rachada, amassada ou soltando pedaços.",
@@ -279,17 +279,17 @@ export const BLOCOS_PADRAO = [
       it("ELE1", "Tensão da bateria ≥ 90%", "Meça a tensão real da bateria com o multímetro ou telemetria, não só a estimativa da porcentagem.",
         "Medição direta de tensão antes do início.", "A porcentagem estimada pode divergir da tensão real, especialmente em baterias mais usadas.", "status", "sessao", "V"),
       it("ELE2", "Calibração do IMU aéreo", "Calibre o sensor de movimento (IMU) da parte aérea seguindo o procedimento do fabricante.",
-        "Calibração do sensor inercial do subsistema aéreo.", "Um IMU descalibrado introduz erro sistemático em toda leitura de atitude e aceleração.", "tarefa", "sessao"),
+        "Calibração do sensor inercial do subsistema aéreo.", "Um IMU descalibrado introduz erro sistemático em toda leitura de atitude e aceleração.", "tarefa", "sessao", "", ["voo"]),
       it("ELE3", "Calibração do IMU subaquático", "Mesma calibração, mas no sensor de movimento da parte que vai para dentro d'água.",
-        "Calibração do sensor inercial do subsistema subaquático.", "Mesmo risco do item anterior, aplicado ao conjunto que opera submerso.", "tarefa", "sessao"),
+        "Calibração do sensor inercial do subsistema subaquático.", "Mesmo risco do item anterior, aplicado ao conjunto que opera submerso.", "tarefa", "sessao", "", ["sub"]),
       it("ELE4", "Calibração da bússola", "Calibre a bússola longe de metal e ímãs, para as leituras de direção não saírem tortas.",
         "Calibração do magnetômetro.", "Interferência magnética não corrigida desalinha o rumo (heading) usado pelo controlador.", "tarefa", "sessao"),
       it("ELE5", "Fix de GPS (≥ 8 satélites)", "Antes de armar, confira que o GPS já está enxergando pelo menos 8 satélites — menos que isso, a posição fica imprecisa.",
         "Verificação da contagem de satélites e qualidade do fix antes do armamento.", "Um fix fraco aumenta o erro de posição, afetando tanto segurança quanto a qualidade dos dados de trajetória.", "status", "ensaio", "sats"),
       it("ELE6", "Parâmetros PID aéreo carregados", "Confirme que os parâmetros de controle (PID) do modo aéreo estão carregados na controladora, e não os de outro veículo.",
-        "Checagem dos ganhos de controle carregados no firmware.", "Ganhos errados (de outro veículo/configuração) podem tornar o controle instável.", "status", "sessao"),
+        "Checagem dos ganhos de controle carregados no firmware.", "Ganhos errados (de outro veículo/configuração) podem tornar o controle instável.", "status", "sessao", "", ["voo"]),
       it("ELE7", "Parâmetros S-plane/PID subaquático carregados", "Mesma confirmação, para os parâmetros de controle do modo subaquático.",
-        "Checagem dos ganhos de controle do modo subaquático.", "Mesmo risco do item anterior, no subsistema subaquático.", "status", "sessao"),
+        "Checagem dos ganhos de controle do modo subaquático.", "Mesmo risco do item anterior, no subsistema subaquático.", "status", "sessao", "", ["sub"]),
       it("ELE8", "Sensor de profundidade — zero em superfície", "Com o veículo na superfície da água, zere o sensor de profundidade para as leituras começarem do lugar certo.",
         "Calibração do zero do sensor de pressão/profundidade.", "Um offset não corrigido desloca todas as leituras de profundidade do ensaio inteiro.", "tarefa", "ensaio"),
       it("ELE9", "Log de dados habilitado (SD/telemetria)", "Confirme que a gravação de dados está ligada antes de começar — sem isso, o ensaio não deixa registro.",
@@ -297,9 +297,9 @@ export const BLOCOS_PADRAO = [
       it("ELE10", "Link de rádio/Bluetooth operacional", "Teste o rádio ou Bluetooth de controle/telemetria antes de colocar o veículo em operação.",
         "Teste de comunicação antes do início da operação.", "Perda de link durante o ensaio pode impedir intervenção em caso de problema.", "status", "sessao"),
       it("ELE11", "ESCs aéreos — armamento testado em terra", "Teste o armamento dos motores aéreos em terra firme antes de ir para a água.",
-        "Teste de armamento em bancada/terra antes da operação real.", "Detectar um problema de armamento em terra é seguro; detectá-lo já no ar ou na água, não.", "tarefa", "sessao"),
+        "Teste de armamento em bancada/terra antes da operação real.", "Detectar um problema de armamento em terra é seguro; detectá-lo já no ar ou na água, não.", "tarefa", "sessao", "", ["voo"]),
       it("ELE12", "ESCs subaquáticos — rotação testada em água", "Teste se os motores subaquáticos giram no sentido certo, já dentro d'água, antes do ensaio de verdade.",
-        "Teste funcional de sentido de rotação em água.", "Rotação invertida em algum propulsor gera empuxo na direção errada e pode ser confundida com falha de controle.", "tarefa", "sessao"),
+        "Teste funcional de sentido de rotação em água.", "Rotação invertida em algum propulsor gera empuxo na direção errada e pode ser confundida com falha de controle.", "tarefa", "sessao", "", ["sub"]),
     ],
   },
   {
@@ -559,12 +559,12 @@ export const BLOCOS_PADRAO = [
         "Na configuração submersa, confirme água limpa, nível estável e o propulsor a 0,5 m de profundidade e 0,5 m da parede do tanque.",
         "Verificação da geometria de imersão (profundidade e distância da parede) no ensaio submerso.",
         "Profundidade e distância de parede incorretas alteram o escoamento ao redor da hélice e distorcem a leitura de empuxo.",
-        "status", "sessao"),
+        "status", "sessao", "", ["sub"]),
       it("BN-SG6", "[Config. submersa] Isolamento elétrico de todos os conectores verificado antes da imersão.",
         "Antes de colocar qualquer parte elétrica na água, confira que todos os conectores estão bem isolados.",
         "Verificação de isolamento elétrico de conectores antes da imersão.",
         "Um conector mal isolado pode causar curto-circuito ou choque no contato com a água.",
-        "status", "sessao"),
+        "status", "sessao", "", ["sub"]),
     ],
   },
   {
@@ -586,7 +586,7 @@ export const BLOCOS_PADRAO = [
         "Na configuração submersa, mantenha sempre o mesmo nível de água e a mesma posição do propulsor entre tratamentos.",
         "Confirmação de constância da geometria de imersão entre tratamentos.",
         "Mudar a geometria de imersão entre tratamentos adiciona uma variável não controlada à comparação.",
-        "status", "sessao"),
+        "status", "sessao", "", ["sub"]),
       it("BN-VE4", "Calibração dos instrumentos (células de carga, offset de corrente) conferida no início da sessão.",
         "No começo da sessão, confira de novo a calibração das células de carga e o offset de corrente.",
         "Checagem de calibração dos instrumentos no início da sessão de ensaios.",
@@ -696,7 +696,7 @@ export const BLOCOS_PADRAO = [
         "Confira o casco e as vedações antes de ir para a água — trincas ou folgas comprometem a estanqueidade.",
         "Inspeção visual do casco e das vedações antes da missão.",
         "Um casco ou vedação comprometidos podem alagar a eletrônica durante a etapa submersa.",
-        "status", "sessao"),
+        "status", "sessao", "", ["sub"]),
       it("VJ-PV2", "Bateria(s) (Tattu 4S1P 2300 mAh) carregada(s) e sem dano.",
         "Confira a carga e a integridade física das baterias Tattu 4S1P antes da missão.",
         "Inspeção de carga e integridade das baterias antes da missão.",

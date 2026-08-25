@@ -15,6 +15,31 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "
 const ICONES_CATEGORIA = { Waves, Gauge, Rocket };
 const categoriaMeta = (id) => CATEGORIAS.find(c => c.id === id) || CATEGORIAS[0];
 
+// Linha compacta de um item: [left] título [right] "?" — explicação simples fica escondida
+// atrás do "?"; "detalhe técnico" é um nível a mais dentro do painel que o "?" abre.
+function ItemCompacto({ item, aberto, tecAberto, onToggleExplicacao, onToggleDetalhe, left, right, onClickRow, className = "" }) {
+  return (
+    <div className={`rounded-lg border ${className}`}>
+      <div className={`flex items-center gap-2 px-2.5 py-2 ${onClickRow ? "cursor-pointer" : ""}`} onClick={onClickRow}>
+        {left}
+        <span className="flex-1 min-w-0 text-sm font-medium text-slate-800 truncate">{item.titulo || <span className="text-slate-300">(sem título)</span>}</span>
+        {right}
+        <button onClick={e => { e.stopPropagation(); onToggleExplicacao(); }} title="O que é isso?" className="w-5 h-5 rounded-full border border-slate-300 text-slate-400 hover:border-blue-400 hover:text-blue-600 text-[11px] font-bold flex items-center justify-center shrink-0">?</button>
+      </div>
+      {aberto && (<div className="px-2.5 pb-2.5" onClick={e => e.stopPropagation()}>
+        <div className="text-xs bg-slate-50 border border-slate-100 rounded-lg p-2 space-y-1.5">
+          <p className="text-slate-600">{item.simples || "—"}</p>
+          <button onClick={onToggleDetalhe} className="text-[11px] text-blue-700 font-medium flex items-center gap-1"><ChevronDown size={12} className={`transition-transform ${tecAberto ? "rotate-180" : ""}`} /> detalhe técnico</button>
+          {tecAberto && (<div className="pt-1 space-y-1">
+            <p><b className="text-slate-600">O que isso gera:</b> <span className="text-slate-500">{item.gera || "—"}</span></p>
+            <p><b className="text-slate-600">Por que isso é importante?</b> <span className="text-slate-500">{item.porque || "—"}</span></p>
+          </div>)}
+        </div>
+      </div>)}
+    </div>
+  );
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -40,6 +65,7 @@ export default function App() {
   const [ensaioRows, setEnsaioRows] = useState([]);
   const [sessaoValores, setSessaoValores] = useState({});
   const [detalheAbertos, setDetalheAbertos] = useState(() => new Set());
+  const [explicacaoAbertos, setExplicacaoAbertos] = useState(() => new Set());
   const [libEditMode, setLibEditMode] = useState(false);
   const [itemDraft, setItemDraft] = useState(null);
   const [blocoDraft, setBlocoDraft] = useState(null);
@@ -128,6 +154,7 @@ export default function App() {
     setSelecionados(s => { const n = new Set(s); ids.forEach(id => todosMarcados ? n.delete(id) : n.add(id)); return n; });
   };
   const toggleDetalhe = (id) => setDetalheAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleExplicacao = (id) => setExplicacaoAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const openNewItem = (blocoId) => setItemDraft({ blocoId, itemId: null, titulo: "", simples: "", gera: "", porque: "", captura: "valor", unidade: "", escopo: "ensaio" });
   const openEditItem = (blocoId, item) => setItemDraft({ blocoId, itemId: item.id, ...item });
@@ -315,7 +342,7 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
 
           <section>
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-1">Marque o que se aplica</h2>
-            <p className="text-xs text-slate-500 mb-3">Cada requisito já vem com uma explicação simples. Toque em "detalhe técnico" para ver o rigor por trás.</p>
+            <p className="text-xs text-slate-500 mb-3">Toque no "?" de um item para ver a explicação; dentro dela, "detalhe técnico" mostra o rigor por trás.</p>
             <div className="space-y-3">
               {blocosAtivos.map(bloco => {
                 const ids = bloco.itens.map(i => i.id);
@@ -332,22 +359,14 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
                   <div className="mt-2 space-y-1.5 pl-6">
                     {bloco.itens.map(item => {
                       const marcado = selecionados.has(item.id);
-                      const aberto = detalheAbertos.has(item.id);
-                      return (<div key={item.id} onClick={() => toggleItem(item.id)} className={`rounded-lg border p-2.5 cursor-pointer ${marcado ? "border-blue-300 bg-blue-50/50" : "border-slate-100 hover:border-slate-200"}`}>
-                        <div className="flex items-start gap-2">
-                          <input type="checkbox" checked={marcado} onChange={() => toggleItem(item.id)} onClick={e => e.stopPropagation()} className="mt-1 shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-semibold text-slate-800">{item.titulo || <span className="text-slate-300">(sem título)</span>}</div>
-                            <p className="text-sm text-slate-600 mt-0.5">{item.simples}</p>
-                            <button onClick={e => { e.stopPropagation(); toggleDetalhe(item.id); }} className="text-xs text-blue-700 font-medium flex items-center gap-1 mt-1.5"><ChevronDown size={13} className={`transition-transform ${aberto ? "rotate-180" : ""}`} /> detalhe técnico</button>
-                            {aberto && (<div className="mt-1.5 text-xs bg-slate-50 border border-slate-100 rounded-lg p-2 space-y-1.5">
-                              <p><b className="text-slate-600">O que isso gera:</b> <span className="text-slate-500">{item.gera || "—"}</span></p>
-                              <p><b className="text-slate-600">Por que isso é importante?</b> <span className="text-slate-500">{item.porque || "—"}</span></p>
-                            </div>)}
-                          </div>
-                          {libEditMode && <div onClick={e => e.stopPropagation()} className="flex gap-1 shrink-0"><button onClick={() => openEditItem(bloco.id, item)} className="text-slate-400 hover:text-blue-600 p-1"><Pencil size={13} /></button><button onClick={() => removeItem(bloco.id, item.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 size={13} /></button></div>}
-                        </div>
-                      </div>);
+                      return (<ItemCompacto key={item.id} item={item}
+                        aberto={explicacaoAbertos.has(item.id)} tecAberto={detalheAbertos.has(item.id)}
+                        onToggleExplicacao={() => toggleExplicacao(item.id)} onToggleDetalhe={() => toggleDetalhe(item.id)}
+                        onClickRow={() => toggleItem(item.id)}
+                        className={marcado ? "border-blue-300 bg-blue-50/50" : "border-slate-100 hover:border-slate-200"}
+                        left={<input type="checkbox" checked={marcado} onChange={() => toggleItem(item.id)} onClick={e => e.stopPropagation()} className="shrink-0" />}
+                        right={libEditMode && <div onClick={e => e.stopPropagation()} className="flex gap-1 shrink-0"><button onClick={() => openEditItem(bloco.id, item)} className="text-slate-400 hover:text-blue-600 p-1"><Pencil size={13} /></button><button onClick={() => removeItem(bloco.id, item.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 size={13} /></button></div>}
+                      />);
                     })}
                     {libEditMode && <button onClick={() => openNewItem(bloco.id)} className="text-xs text-blue-700 font-medium flex items-center gap-1 mt-1"><Plus size={13} /> Novo requisito neste bloco</button>}
                   </div>
@@ -380,13 +399,15 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
 
             {sessaoItems.length > 0 && (<section>
               <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><ClipboardCheck size={15} className="text-blue-700" /> Checklist da sessão</h2>
-              <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
+              <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-1.5">
                 {sessaoItems.map(item => { const v = sessaoValores[item.id] || {}; const cap = CAPTURAS[item.captura] || CAPTURAS.valor; return (
-                  <div key={item.id} className="border-b border-slate-100 last:border-0 pb-2 last:pb-0 flex items-center justify-between gap-2 flex-wrap">
-                    <span className="text-sm text-slate-800 flex-1 min-w-40">{item.titulo}</span>
-                    {item.captura === "valor" ? (<div className="flex items-center gap-1"><input disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} placeholder="valor" className="w-28 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />{item.unidade && <span className="text-xs text-slate-400 w-10">{item.unidade}</span>}</div>)
-                      : (<div className="flex gap-1.5">{cap.opcoes.map(op => { const on = v.resultado === op; return <button key={op} disabled={readOnly} onClick={() => setSessaoValor(item.id, { resultado: on ? "" : op })} className={`text-xs px-2.5 py-1 rounded-lg font-medium disabled:opacity-50 ${on ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{op}</button>; })}</div>)}
-                  </div>); })}
+                  <ItemCompacto key={item.id} item={item}
+                    aberto={explicacaoAbertos.has(item.id)} tecAberto={detalheAbertos.has(item.id)}
+                    onToggleExplicacao={() => toggleExplicacao(item.id)} onToggleDetalhe={() => toggleDetalhe(item.id)}
+                    className="border-slate-100"
+                    right={item.captura === "valor" ? (<div className="flex items-center gap-1" onClick={e => e.stopPropagation()}><input disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} placeholder="valor" className="w-24 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />{item.unidade && <span className="text-xs text-slate-400 w-8">{item.unidade}</span>}</div>)
+                      : (<div className="flex gap-1" onClick={e => e.stopPropagation()}>{cap.opcoes.map(op => { const on = v.resultado === op; return <button key={op} disabled={readOnly} onClick={() => setSessaoValor(item.id, { resultado: on ? "" : op })} className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 ${on ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{op}</button>; })}</div>)}
+                  />); })}
               </div>
             </section>)}
 

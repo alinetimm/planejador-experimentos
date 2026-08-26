@@ -3,17 +3,41 @@
 // Cada item tem uma explicação simples (sempre visível) e um detalhe técnico
 // (escondido atrás do botão "detalhe técnico"): o que ele gera e por que importa.
 //
-// captura: como o item é preenchido durante o ensaio.
-//   "valor"    → campo de texto/número (vira coluna na planilha de campo, se escopo = "ensaio")
-//   "status"   → Passou / Falhou / N/A
-//   "tarefa"   → Feito / Pendente / N/A
+// captura: campo legado (pré-tipos de resposta). Só usado hoje como base pro valor
+// padrão de `resposta` em itens que não têm `resposta` explícito — ver respostaDe().
+//   "valor" | "status" | "tarefa"
 // escopo: "sessao" (checado uma vez, no protocolo) ou "ensaio" (repetido a cada ensaio → planilha de campo)
+//
+// resposta: tipo de controle de resposta do item, um de seis.
+//   "verificacao" → Passou / Falhou / N/A (opções editáveis via `opcoes`)
+//   "ok_ajustar"  → OK / Ajustar / Refazer
+//   "sim_nao"     → Sim / Não / N/A
+//   "valor"       → número + unidade (`unidade`)
+//   "texto"       → caixa de texto multilinha
+//   "opcoes"      → lista de opções personalizadas (`opcoes[]`)
+// Item sem `resposta` explícito herda um padrão de respostaDe() a partir do `captura` legado.
 
-export const CAPTURAS = {
-  status: { label: "Verificação", opcoes: ["Passou", "Falhou", "N/A"] },
-  tarefa: { label: "Tarefa", opcoes: ["Feito", "Pendente", "N/A"] },
-  valor: { label: "Valor", opcoes: [] },
+export const RESPOSTAS = {
+  verificacao: { label: "Verificação (Passou/Falhou/N-A)", padrao: ["Passou", "Falhou", "N/A"] },
+  ok_ajustar: { label: "OK / Ajustar / Refazer", padrao: ["OK", "Ajustar", "Refazer"] },
+  sim_nao: { label: "Sim / Não", padrao: ["Sim", "Não", "N/A"] },
+  valor: { label: "Valor numérico", padrao: [] },
+  texto: { label: "Texto (caixa ampla)", padrao: [] },
+  opcoes: { label: "Opções personalizadas", padrao: [] },
 };
+
+export function respostaDe(item) {
+  if (item.resposta) return item.resposta;
+  if (item.captura === "valor") return "valor";
+  if (item.captura === "tarefa") return "opcoes";
+  return "verificacao";
+}
+export function opcoesDe(item) {
+  if (item.opcoes && item.opcoes.length) return item.opcoes;
+  const r = respostaDe(item);
+  if (r === "opcoes" && item.captura === "tarefa") return ["Feito", "Pendente", "N/A"];
+  return RESPOSTAS[r]?.padrao || [];
+}
 
 // Categorias de experimento — cada bloco da biblioteca pertence a uma delas.
 export const CATEGORIAS = [
@@ -56,8 +80,9 @@ export const FASES_MISSAO = [
 let _iid = 0;
 const uid = () => `r${Date.now().toString(36)}${(_iid++).toString(36)}`;
 
-const it = (id, titulo, simples, gera, porque, captura, escopo, unidade = "", modos) =>
-  ({ id, titulo, simples, gera, porque, captura, escopo, unidade, ...(modos ? { modos } : {}) });
+const it = (id, titulo, simples, gera, porque, captura, escopo, unidade = "", modos, resposta, opcoes) =>
+  ({ id, titulo, simples, gera, porque, captura, escopo, unidade,
+     ...(modos ? { modos } : {}), ...(resposta ? { resposta } : {}), ...(opcoes ? { opcoes } : {}) });
 
 export const BLOCOS_PADRAO = [
   {
@@ -201,7 +226,7 @@ export const BLOCOS_PADRAO = [
     itens: [
       it("F1", "ensaio_id", "Dê um número ou código único para cada ensaio, para nunca confundir um com outro depois.",
         "Chave única que identifica a linha na planilha de campo.", "Sem um identificador único, fica fácil duplicar ou perder o rastro de um ensaio ao juntar dados de fontes diferentes.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
       it("F2", "data", "A data em que o ensaio foi realizado.",
         "Coluna de data (AAAA-MM-DD) na planilha de campo.", "Permite cruzar o ensaio com condições externas (clima, maré) e ordenar a sequência de execução.",
         "valor", "ensaio"),
@@ -216,13 +241,13 @@ export const BLOCOS_PADRAO = [
         "valor", "ensaio"),
       it("F6", "responsavel", "Quem executou ou registrou este ensaio.",
         "Coluna de autoria/registro por ensaio.", "Permite rastrear e esclarecer dúvidas sobre como um ensaio específico foi conduzido.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
       it("F7", "local", "Onde o ensaio foi feito (tanque, praia, coordenadas).",
         "Coluna de local/coordenadas por ensaio.", "O local muda variáveis ambientais relevantes (correnteza, salinidade, espaço disponível).",
         "valor", "ensaio"),
       it("F8", "observacoes", "Qualquer coisa fora do comum que aconteceu durante o ensaio e vale a pena lembrar depois.",
         "Campo de texto livre por ensaio.", "Anomalias não previstas nos campos estruturados só ficam registradas se houver um lugar livre para anotá-las.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
     ],
   },
   {
@@ -308,9 +333,9 @@ export const BLOCOS_PADRAO = [
       it("ELE8", "Sensor de profundidade — zero em superfície", "Com o veículo na superfície da água, zere o sensor de profundidade para as leituras começarem do lugar certo.",
         "Calibração do zero do sensor de pressão/profundidade.", "Um offset não corrigido desloca todas as leituras de profundidade do ensaio inteiro.", "tarefa", "ensaio"),
       it("ELE9", "Log de dados habilitado (SD/telemetria)", "Confirme que a gravação de dados está ligada antes de começar — sem isso, o ensaio não deixa registro.",
-        "Confirmação de que o log está ativo e gravando antes do início do ensaio.", "É o requisito mais básico de todos: sem log, não há dado para analisar depois.", "status", "ensaio"),
+        "Confirmação de que o log está ativo e gravando antes do início do ensaio.", "É o requisito mais básico de todos: sem log, não há dado para analisar depois.", "status", "ensaio", "", undefined, "sim_nao"),
       it("ELE10", "Link de rádio/Bluetooth operacional", "Teste o rádio ou Bluetooth de controle/telemetria antes de colocar o veículo em operação.",
-        "Teste de comunicação antes do início da operação.", "Perda de link durante o ensaio pode impedir intervenção em caso de problema.", "status", "sessao"),
+        "Teste de comunicação antes do início da operação.", "Perda de link durante o ensaio pode impedir intervenção em caso de problema.", "status", "sessao", "", undefined, "sim_nao"),
       it("ELE11", "ESCs aéreos — armamento testado em terra", "Teste o armamento dos motores aéreos em terra firme antes de ir para a água.",
         "Teste de armamento em bancada/terra antes da operação real.", "Detectar um problema de armamento em terra é seguro; detectá-lo já no ar ou na água, não.", "tarefa", "sessao", "", ["voo"]),
       it("ELE12", "ESCs subaquáticos — rotação testada em água", "Teste se os motores subaquáticos giram no sentido certo, já dentro d'água, antes do ensaio de verdade.",
@@ -364,52 +389,52 @@ export const BLOCOS_PADRAO = [
         "É a força que a hélice faz para 'empurrar'. A bancada mede por uma alavanca ligada a uma célula de carga (HX711).",
         "Série de leituras de força (kgf) por ponto de rotação, gravada em CSV pela bancada.",
         "É a principal variável de resposta do ensaio — é o que relaciona rotação e corrente ao desempenho útil do propulsor.",
-        "status", "sessao", "kgf"),
+        "status", "sessao", "kgf", undefined, "valor"),
       it("BN-G2", "Torque",
         "É o 'esforço de giro' do motor. Medido pela reação num braço preso a outra célula de carga.",
         "Série de torque (N·m) por ponto, gravada junto ao empuxo no mesmo CSV.",
         "Combinado com RPM, dá a potência mecânica entregue pelo eixo — essencial para calcular a eficiência do conjunto.",
-        "status", "sessao", "N·m"),
+        "status", "sessao", "N·m", undefined, "valor"),
       it("BN-G3", "RPM",
         "Quantas voltas por minuto a hélice dá. Um sensor Hall conta os pulsos do giro.",
         "Contagem de pulsos convertida em rpm, amostrada junto com as demais grandezas.",
         "É a variável que liga o comando de throttle ao comportamento físico real do propulsor — throttle e RPM nem sempre são proporcionais.",
-        "status", "sessao", "rpm"),
+        "status", "sessao", "rpm", undefined, "valor"),
       it("BN-G4", "Corrente total",
         "Quanta corrente o sistema puxa no total. É a base do cálculo de energia (ACS758 + INA219).",
         "Corrente total (A) amostrada continuamente, usada junto com a tensão para calcular potência elétrica.",
         "É o dado central do modelo de energia da bancada — sem ele não dá para calcular potência nem eficiência.",
-        "status", "sessao", "A"),
+        "status", "sessao", "A", undefined, "valor"),
       it("BN-G5", "Corrente de fase (3×)",
         "Corrente em cada uma das três fases do motor. Serve só para caracterizar o motor — não entra no modelo de energia.",
         "Três séries de corrente de fase (A), uma por enrolamento do motor BLDC.",
         "Ajuda a caracterizar o comportamento elétrico interno do motor, mas é informação complementar — o modelo de energia usa só a corrente total.",
-        "status", "sessao", "A"),
+        "status", "sessao", "A", undefined, "valor"),
       it("BN-G6", "Tensão",
         "A tensão de alimentação (INA219). Junto com a corrente total, dá a potência.",
         "Tensão de barramento (V), amostrada no mesmo instante que a corrente total.",
         "Tensão e corrente total juntas fecham o cálculo de potência elétrica instantânea.",
-        "status", "sessao", "V"),
+        "status", "sessao", "V", undefined, "valor"),
       it("BN-G7", "Potência elétrica",
         "Quanta energia por segundo o sistema gasta. Calculada de tensão × corrente total.",
         "Potência elétrica (W), calculada no pós-processamento a partir de tensão e corrente total.",
         "É a grandeza que permite comparar o custo energético de diferentes configurações de propulsor e rotação.",
-        "status", "sessao", "W"),
+        "status", "sessao", "W", undefined, "valor"),
       it("BN-G8", "Eficiência",
         "Quanto da energia gasta vira empuxo útil. Em RPM muito baixo do T200, os pontos são filtrados na análise — não na coleta.",
         "Eficiência (%) calculada como razão entre empuxo útil e potência elétrica consumida, por ponto de rotação.",
         "É a métrica que resume o desempenho do propulsor e permite comparar configurações de forma justa.",
-        "status", "sessao", "%"),
+        "status", "sessao", "%", undefined, "valor"),
       it("BN-G9", "Temperatura do motor (A CONFIRMAR)",
         "O quanto o motor esquenta durante o ensaio. Ainda não há sensor instalado — confirme antes de marcar.",
         "Série de temperatura (°C) do motor ao longo do ensaio, quando o sensor estiver instalado.",
         "Aquecimento excessivo pode alterar o desempenho do motor ao longo do ensaio e mascarar o efeito da rotação.",
-        "status", "sessao", "°C"),
+        "status", "sessao", "°C", undefined, "valor"),
       it("BN-G10", "Velocidade do fluido, 3 posições (A CONFIRMAR)",
         "A velocidade do ar/água movimentado pela hélice, em três pontos. Ainda é trabalho futuro, não implementado.",
         "Perfil de velocidade do fluido (m/s) em três posições ao redor da hélice.",
         "Permitiria validar o modelo de empuxo a partir do escoamento, não só das grandezas elétricas — mas depende de instrumentação ainda não disponível.",
-        "status", "sessao", "m/s"),
+        "status", "sessao", "m/s", undefined, "valor"),
     ],
   },
   {
@@ -500,7 +525,7 @@ export const BLOCOS_PADRAO = [
         "Confirme que a placa de controle está ligada e conversando pela serial com o computador.",
         "Verificação de energização e comunicação serial da placa STM32F407VET6.",
         "Sem comunicação serial confirmada, não há como saber se a bancada está de fato executando e registrando a sequência.",
-        "status", "sessao"),
+        "status", "sessao", "", undefined, "sim_nao"),
       it("BN-PE5", "Cartão SD inserido, formatado (FAT32) e com espaço livre suficiente.",
         "Confira que o cartão SD está encaixado, formatado em FAT32 e com espaço de sobra para o CSV do ensaio.",
         "Verificação de presença, formatação e espaço livre do cartão SD.",
@@ -522,7 +547,7 @@ export const BLOCOS_PADRAO = [
         "Confirme que o sensor de tensão INA219 está respondendo pela comunicação I2C antes de começar.",
         "Teste de comunicação I2C do INA219 de tensão de entrada.",
         "Sem esse sensor respondendo, a bancada não consegue calcular potência elétrica durante o ensaio.",
-        "status", "sessao"),
+        "status", "sessao", "", undefined, "sim_nao"),
       it("BN-PS2", "ACS758LCB-100B da corrente TOTAL instalado e com offset calibrado.",
         "Confira que o sensor de corrente total está instalado e com o offset (zero) calibrado.",
         "Verificação de instalação e calibração de offset do ACS758 de corrente total.",
@@ -537,7 +562,7 @@ export const BLOCOS_PADRAO = [
         "Confirme que o sensor Hall de RPM e a placa que conta os pulsos estão funcionando antes do ensaio.",
         "Teste funcional do sensor Hall e da placa de contagem de pulsos de RPM.",
         "Sem RPM confiável, não dá para relacionar throttle, empuxo, torque e eficiência entre si.",
-        "status", "sessao"),
+        "status", "sessao", "", undefined, "sim_nao"),
       it("BN-PS5", "2× células de carga (empuxo e torque) com HX711 calibradas (pesos-padrão 25/50/100 g).",
         "Calibre as duas células de carga (empuxo e torque) com os pesos-padrão de 25, 50 e 100 g antes do ensaio.",
         "Calibração das duas células de carga (HX711) com pesos-padrão de referência.",
@@ -616,7 +641,7 @@ export const BLOCOS_PADRAO = [
     itens: [
       it("BN-M1", "ensaio_id", "Dê um código único para este ensaio da bancada, para nunca confundir um arquivo CSV com outro depois.",
         "Chave única que identifica a linha na planilha de campo da bancada.", "Sem um identificador único, fica fácil perder o rastro de qual CSV corresponde a qual configuração testada.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
       it("BN-M2", "data", "A data em que o ensaio de bancada foi realizado.",
         "Coluna de data (AAAA-MM-DD) na planilha de campo.", "Permite ordenar e cruzar os ensaios com o restante do diário de bancada.",
         "valor", "ensaio"),
@@ -628,13 +653,13 @@ export const BLOCOS_PADRAO = [
         "valor", "ensaio"),
       it("BN-M5", "nome do arquivo CSV (SD)", "O nome exato do arquivo que a bancada gravou no cartão SD para este ensaio.",
         "Coluna de texto com o nome do arquivo bruto gerado pela bancada.", "É o vínculo direto entre a linha da planilha e o dado bruto real — sem ele a planilha vira só uma lista solta.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
       it("BN-M6", "local do backup", "Onde você copiou o CSV depois de tirá-lo do cartão SD.",
         "Coluna de texto com o caminho/local do backup do arquivo.", "Garante que o dado bruto sobrevive mesmo se o cartão SD for reformatado ou perdido.",
         "valor", "ensaio"),
       it("BN-M7", "responsável", "Quem executou este ensaio de bancada.",
         "Coluna de autoria por ensaio.", "Permite esclarecer dúvidas sobre como um ensaio específico foi conduzido.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
       it("BN-M8", "hora início", "A hora em que o ensaio começou.",
         "Coluna de hora de início por ensaio.", "Ajuda a cruzar o ensaio com condições ambientais e com o timestamp interno do CSV.",
         "valor", "ensaio"),
@@ -643,7 +668,7 @@ export const BLOCOS_PADRAO = [
         "valor", "ensaio"),
       it("BN-M10", "observações", "Qualquer coisa fora do comum que aconteceu durante o ensaio de bancada.",
         "Campo de texto livre por ensaio.", "Anomalias não previstas nos campos estruturados só ficam registradas se houver um lugar livre para anotá-las.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
     ],
   },
 
@@ -738,22 +763,22 @@ export const BLOCOS_PADRAO = [
         "Confirme que o sensor de tensão está instalado no ponto certo, entre a bateria e o ESC.",
         "Verificação de instalação do INA219 no barramento entre bateria e ESC.",
         "Instalado no ponto errado, o sensor mede uma tensão que não representa o que chega de fato ao ESC.",
-        "status", "sessao"),
+        "status", "sessao", "", undefined, "sim_nao"),
       it("VJ-PI2", "ACS758LCB-100B de corrente TOTAL no mesmo barramento.",
         "Confirme que o sensor de corrente total está no mesmo barramento do sensor de tensão.",
         "Verificação de instalação do ACS758 de corrente total no barramento correto.",
         "Tensão e corrente precisam ser medidas no mesmo ponto para o cálculo de potência fazer sentido.",
-        "status", "sessao"),
+        "status", "sessao", "", undefined, "sim_nao"),
       it("VJ-PI3", "Armazenamento embarcado (SD/telemetria) funcionando e com espaço livre.",
         "Confira que o armazenamento embarcado está funcionando e com espaço de sobra para a missão inteira.",
         "Verificação de funcionamento e espaço livre do armazenamento embarcado.",
         "Ficar sem espaço no meio da missão significa perder dados justamente das últimas etapas.",
-        "status", "sessao"),
+        "status", "sessao", "", undefined, "sim_nao"),
       it("VJ-PI4", "Horário do sistema embarcado sincronizado com o horário da equipe em solo.",
         "Sincronize o relógio do sistema embarcado com o horário da equipe em solo antes de começar.",
         "Sincronização de horário entre o sistema embarcado e a equipe em solo.",
         "Sem essa sincronização, fica difícil cruzar o log embarcado com anotações e observações feitas em solo.",
-        "status", "sessao"),
+        "status", "sessao", "", undefined, "sim_nao"),
     ],
   },
   {
@@ -844,7 +869,7 @@ export const BLOCOS_PADRAO = [
     itens: [
       it("VJ-M1", "ensaio_id (execução)", "Dê um código único para cada execução completa da missão (não para cada etapa).",
         "Chave única que identifica a execução na planilha de campo.", "Como cada execução tem 8 linhas (uma por etapa), esse código é o que agrupa as 8 etapas de uma mesma missão.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
       it("VJ-M2", "etapa (1–8)", "O número da etapa dentro da execução (1 a 8), sempre na ordem fixa da missão.",
         "Coluna numérica indicando qual das 8 etapas fixas está sendo registrada.", "Permite separar e comparar o desempenho de cada etapa entre execuções diferentes.",
         "valor", "ensaio"),
@@ -865,13 +890,13 @@ export const BLOCOS_PADRAO = [
         "valor", "ensaio"),
       it("VJ-M8", "arquivo de dados", "O nome do arquivo de telemetria/energia que corresponde a essa etapa.",
         "Coluna de texto com o nome do arquivo bruto de dados da etapa.", "É o vínculo direto entre a linha da planilha e o dado bruto real gerado durante aquela etapa.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
       it("VJ-M9", "responsável", "Quem executou ou registrou essa etapa.",
         "Coluna de autoria/registro por etapa.", "Permite esclarecer dúvidas sobre como uma etapa específica foi conduzida.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
       it("VJ-M10", "observações", "Qualquer coisa fora do comum que aconteceu durante essa etapa.",
         "Campo de texto livre por etapa.", "Anomalias específicas de uma etapa (não da execução inteira) só ficam registradas se houver um campo livre para isso.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "texto"),
     ],
   },
 ];

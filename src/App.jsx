@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import * as cloud from "./cloud";
 import { download, toCSV } from "./lib/stats";
-import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORDEM_SUGERIDA, CAPTURAS, CATEGORIAS, CATEGORIA_PADRAO, FASES_MISSAO } from "./lib/requisitos";
+import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORDEM_SUGERIDA, RESPOSTAS, respostaDe, opcoesDe, CATEGORIAS, CATEGORIA_PADRAO, FASES_MISSAO } from "./lib/requisitos";
 import AnalisarDados from "./AnalisarDados";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -30,7 +30,7 @@ const resumoModoFases = (categoria, meta) => {
 
 // Linha compacta de um item: [left] título [right] "?" — explicação simples fica escondida
 // atrás do "?"; "detalhe técnico" é um nível a mais dentro do painel que o "?" abre.
-function ItemCompacto({ item, aberto, tecAberto, onToggleExplicacao, onToggleDetalhe, left, right, onClickRow, className = "" }) {
+function ItemCompacto({ item, aberto, tecAberto, onToggleExplicacao, onToggleDetalhe, left, right, abaixo, onClickRow, className = "" }) {
   return (
     <div className={`rounded-lg border ${className}`}>
       <div className={`flex items-center gap-2 px-2.5 py-2 ${onClickRow ? "cursor-pointer" : ""}`} onClick={onClickRow}>
@@ -39,6 +39,7 @@ function ItemCompacto({ item, aberto, tecAberto, onToggleExplicacao, onToggleDet
         {right}
         <button onClick={e => { e.stopPropagation(); onToggleExplicacao(); }} title="O que é isso?" className="w-5 h-5 rounded-full border border-slate-300 text-slate-400 hover:border-blue-400 hover:text-blue-600 text-[11px] font-bold flex items-center justify-center shrink-0">?</button>
       </div>
+      {abaixo && <div className="px-2.5 pb-2.5" onClick={e => e.stopPropagation()}>{abaixo}</div>}
       {aberto && (<div className="px-2.5 pb-2.5" onClick={e => e.stopPropagation()}>
         <div className="text-xs bg-slate-50 border border-slate-100 rounded-lg p-2 space-y-1.5">
           <p className="text-slate-600">{item.simples || "—"}</p>
@@ -81,6 +82,7 @@ export default function App() {
   const [explicacaoAbertos, setExplicacaoAbertos] = useState(() => new Set());
   const [gruposAlternados, setGruposAlternados] = useState(() => new Set());
   const [ordemAberta, setOrdemAberta] = useState(false);
+  const [celulasAbertas, setCelulasAbertas] = useState(() => new Set());
   const [libEditMode, setLibEditMode] = useState(false);
   const [itemDraft, setItemDraft] = useState(null);
   const [blocoDraft, setBlocoDraft] = useState(null);
@@ -171,10 +173,11 @@ export default function App() {
   const toggleDetalhe = (id) => setDetalheAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleExplicacao = (id) => setExplicacaoAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleGrupo = (id) => setGruposAlternados(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleCelula = (key) => setCelulasAbertas(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const grupoAberto = (id, idx, total) => { const padraoAberto = idx === 0 || total <= 4; return gruposAlternados.has(id) ? !padraoAberto : padraoAberto; };
 
-  const openNewItem = (blocoId) => setItemDraft({ blocoId, itemId: null, titulo: "", simples: "", gera: "", porque: "", captura: "valor", unidade: "", escopo: "ensaio", modos: [] });
-  const openEditItem = (blocoId, item) => setItemDraft({ blocoId, itemId: item.id, modos: [], ...item });
+  const openNewItem = (blocoId) => setItemDraft({ blocoId, itemId: null, titulo: "", simples: "", gera: "", porque: "", captura: "valor", unidade: "", escopo: "ensaio", modos: [], resposta: "verificacao", opcoes: [] });
+  const openEditItem = (blocoId, item) => setItemDraft({ blocoId, itemId: item.id, modos: [], ...item, resposta: respostaDe(item), opcoes: opcoesDe(item) });
   const toggleModoDraft = (modo) => setItemDraft(d => { const cur = d.modos || []; return { ...d, modos: cur.includes(modo) ? cur.filter(m => m !== modo) : [...cur, modo] }; });
   const saveItemDraft = () => {
     if (!itemDraft.titulo.trim()) { flash("Dê um título ao requisito"); return; }
@@ -218,7 +221,14 @@ export default function App() {
   const ensaioItems = selectedFlat.filter(i => i.escopo === "ensaio");
   const blocosComSelecao = blocos.filter(b => selectedFlat.some(i => i.blocoId === b.id));
 
-  const itemVerificado = (item) => { const v = sessaoValores[item.id] || {}; return item.captura === "valor" ? !!(v.valor && v.valor.trim()) : !!v.resultado; };
+  const itemVerificado = (item) => { const v = sessaoValores[item.id] || {}; const r = respostaDe(item); return (r === "valor" || r === "texto") ? !!(v.valor && v.valor.trim()) : !!v.resultado; };
+  const corPilula = (opcao, ativo) => {
+    if (!ativo) return "bg-slate-100 text-slate-600 hover:bg-slate-200";
+    if (["Falhou", "Não", "Refazer"].includes(opcao)) return "bg-rose-600 text-white";
+    if (opcao === "Ajustar") return "bg-amber-500 text-white";
+    return "bg-blue-700 text-white";
+  };
+  const autoGrow = (e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; };
   const sessaoPorBloco = useMemo(() => {
     const map = new Map();
     sessaoItems.forEach(i => { if (!map.has(i.blocoId)) map.set(i.blocoId, { id: i.blocoId, titulo: i.blocoTitulo, fonte: i.blocoFonte, itens: [] }); map.get(i.blocoId).itens.push(i); });
@@ -232,8 +242,8 @@ export default function App() {
   const setEnsaioCell = (rowIdx, itemId, val) => setEnsaioRows(rs => rs.map((r, i) => i === rowIdx ? { ...r, [itemId]: val } : r));
   const delEnsaioRow = (rowIdx) => setEnsaioRows(rs => rs.filter((_, i) => i !== rowIdx));
   const exportPlanilha = () => {
-    const cols = ensaioItems.map(i => i.titulo);
-    const rowsForCSV = ensaioRows.map(r => Object.fromEntries(ensaioItems.map(i => [i.titulo, r[i.id] ?? ""])));
+    const cols = [...ensaioItems.map(i => i.titulo), "O que foi feito"];
+    const rowsForCSV = ensaioRows.map(r => Object.fromEntries([...ensaioItems.map(i => [i.titulo, r[i.id] ?? ""]), ["O que foi feito", r._obs ?? ""]]));
     download("planilha_de_campo.csv", toCSV(rowsForCSV, cols));
   };
 
@@ -249,11 +259,14 @@ export default function App() {
 
     const linhaChecklist = (item) => {
       const v = sessaoValores[item.id] || {};
-      if (item.captura === "valor") {
+      const r = respostaDe(item);
+      if (r === "valor") {
         return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-line">${v.valor ? esc(v.valor) : ""}</span>${item.unidade ? `<span class="fs-unidade">${esc(item.unidade)}</span>` : ""}</div>`;
       }
-      const cap = CAPTURAS[item.captura] || CAPTURAS.status;
-      const opcoes = cap.opcoes.map(op => `<span class="fs-check">${v.resultado === op ? "☑" : "☐"} ${esc(op)}</span>`).join("");
+      if (r === "texto") {
+        return `<div class="fs-texto"><div class="fs-texto-label">${esc(item.titulo)}</div><div class="fs-moldura">${v.valor ? esc(v.valor).replace(/\n/g, "<br>") : ""}</div></div>`;
+      }
+      const opcoes = opcoesDe(item).map(op => `<span class="fs-check">${v.resultado === op ? "☑" : "☐"} ${esc(op)}</span>`).join("");
       return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-opcoes">${opcoes}</span></div><div class="fs-obs">Obs.: <span class="fs-line-obs"></span></div>`;
     };
     const gruposHTML = [...ordemIds, ...restantes].map(id => {
@@ -265,10 +278,11 @@ export default function App() {
 
     const TARGET_ROWS = 10;
     const linhasExtra = Math.max(0, TARGET_ROWS - ensaioRows.length);
+    const obsEnsaiosHTML = ensaioRows.length ? ensaioRows.map((r, idx) => `<div class="fs-texto"><div class="fs-texto-label">Ensaio #${idx + 1} — O que foi feito</div><div class="fs-moldura">${r._obs ? esc(r._obs).replace(/\n/g, "<br>") : ""}</div></div>`).join("") : "";
     const planilhaHTML = ensaioItems.length ? `<h2>Planilha de campo</h2><table class="fs-tabela"><tr><th>#</th>${ensaioItems.map(i => `<th>${esc(i.titulo)}${i.unidade ? ` (${esc(i.unidade)})` : ""}</th>`).join("")}</tr>${[
       ...ensaioRows.map((r, idx) => `<tr><td>${idx + 1}</td>${ensaioItems.map(i => `<td>${esc(r[i.id] ?? "")}</td>`).join("")}</tr>`),
       ...Array.from({ length: linhasExtra }).map((_, k) => `<tr><td>${ensaioRows.length + k + 1}</td>${ensaioItems.map(() => `<td></td>`).join("")}</tr>`),
-    ].join("")}</table>` : "";
+    ].join("")}</table>${obsEnsaiosHTML}` : "";
 
     return `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Folha de Campo — Hydrone</title><style>
 @page{size:A4;margin:14mm}
@@ -293,6 +307,9 @@ p{font-size:13px;line-height:1.5;margin:4px 0}
 .fs-check{margin-left:10px}
 .fs-obs{font-size:10px;color:#94a3b8;padding:0 0 5px;display:flex;align-items:center;gap:6px}
 .fs-line-obs{flex:1;border-bottom:1px dotted #cbd5e1;min-height:12px}
+.fs-texto{margin:4px 0 8px;page-break-inside:avoid}
+.fs-texto-label{font-size:12px;font-weight:600;margin-bottom:3px}
+.fs-moldura{border:1px solid #cbd5e1;border-radius:4px;padding:8px;min-height:60px;font-size:12px;line-height:1.5;white-space:pre-wrap}
 .fs-tabela td{height:22px}
 .fs-tabela{page-break-inside:auto}
 .fs-tabela tr{page-break-inside:avoid}
@@ -542,13 +559,15 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
                       <span className={`text-xs font-semibold shrink-0 ${verificados === grupo.itens.length ? "text-emerald-700" : "text-slate-500"}`}>{verificados}/{grupo.itens.length}</span>
                     </button>
                     {aberto && (<div className="mt-2 space-y-1.5">
-                      {grupo.itens.map(item => { const v = sessaoValores[item.id] || {}; const cap = CAPTURAS[item.captura] || CAPTURAS.valor; return (
+                      {grupo.itens.map(item => { const v = sessaoValores[item.id] || {}; const r = respostaDe(item); const opts = opcoesDe(item); return (
                         <ItemCompacto key={item.id} item={item}
                           aberto={explicacaoAbertos.has(item.id)} tecAberto={detalheAbertos.has(item.id)}
                           onToggleExplicacao={() => toggleExplicacao(item.id)} onToggleDetalhe={() => toggleDetalhe(item.id)}
-                          className={v.resultado === "Falhou" ? "border-rose-200 bg-rose-50/50" : "border-slate-100"}
-                          right={item.captura === "valor" ? (<div className="flex items-center gap-1" onClick={e => e.stopPropagation()}><input disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} placeholder="valor" className="w-24 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />{item.unidade && <span className="text-xs text-slate-400 w-8">{item.unidade}</span>}</div>)
-                            : (<div className="flex gap-1" onClick={e => e.stopPropagation()}>{cap.opcoes.map(op => { const on = v.resultado === op; return <button key={op} disabled={readOnly} onClick={() => setSessaoValor(item.id, { resultado: on ? "" : op })} className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 ${on ? (op === "Falhou" ? "bg-rose-600 text-white" : "bg-blue-700 text-white") : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{op}</button>; })}</div>)}
+                          className={["Falhou", "Não", "Refazer"].includes(v.resultado) ? "border-rose-200 bg-rose-50/50" : "border-slate-100"}
+                          right={r === "valor" ? (<div className="flex items-center gap-1" onClick={e => e.stopPropagation()}><input disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} placeholder="valor" className="w-24 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />{item.unidade && <span className="text-xs text-slate-400 w-8">{item.unidade}</span>}</div>)
+                            : r === "texto" ? null
+                            : (<div className="flex gap-1 flex-wrap justify-end" onClick={e => e.stopPropagation()}>{opts.map(op => { const on = v.resultado === op; return <button key={op} disabled={readOnly} onClick={() => setSessaoValor(item.id, { resultado: on ? "" : op })} className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 ${corPilula(op, on)}`}>{op}</button>; })}</div>)}
+                          abaixo={r === "texto" ? (<textarea disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} onInput={autoGrow} placeholder="Descreva em detalhe o que foi feito…" rows={3} className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400 resize-none min-h-[4.5rem]" />) : null}
                         />); })}
                     </div>)}
                   </div>);
@@ -563,11 +582,16 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
               </div>
               <p className="text-xs text-slate-500 mb-2">Uma linha por ensaio — preencha quando for possível durante a execução.</p>
               {ensaioRows.length === 0 ? <p className="text-sm text-slate-500 bg-slate-100 rounded-lg p-4">Clique em <b>Adicionar ensaio</b> para começar a preencher.</p> : (
-                <div className="overflow-auto rounded-lg border border-slate-200 max-h-96"><table className="w-full text-sm"><thead className="bg-slate-100 sticky top-0"><tr><th className="px-2 py-2 text-left font-semibold text-slate-500 w-10">#</th>{ensaioItems.map(i => <th key={i.id} className="px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">{i.titulo}{i.unidade ? ` (${i.unidade})` : ""}</th>)}<th className="w-8"></th></tr></thead>
+                <div className="overflow-auto rounded-lg border border-slate-200 max-h-96"><table className="w-full text-sm"><thead className="bg-slate-100 sticky top-0"><tr><th className="px-2 py-2 text-left font-semibold text-slate-500 w-10">#</th>{ensaioItems.map(i => <th key={i.id} className="px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">{i.titulo}{i.unidade ? ` (${i.unidade})` : ""}</th>)}<th className="px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">O que foi feito</th><th className="w-8"></th></tr></thead>
                   <tbody>{ensaioRows.map((r, idx) => (<tr key={idx} className={idx % 2 ? "bg-slate-50" : "bg-white"}>
-                    <td className="px-2 py-1 text-slate-400">{idx + 1}</td>
-                    {ensaioItems.map(i => { const cap = CAPTURAS[i.captura] || CAPTURAS.valor; return (<td key={i.id} className="px-1 py-1">{i.captura === "valor" ? (<input disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-2 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent disabled:text-slate-400" />) : (<select disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-1 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent disabled:text-slate-400"><option value=""></option>{cap.opcoes.map(op => <option key={op} value={op}>{op}</option>)}</select>)}</td>); })}
-                    <td className="px-1">{!readOnly && <button onClick={() => delEnsaioRow(idx)} className="text-slate-300 hover:text-rose-500"><Trash2 size={14} /></button>}</td>
+                    <td className="px-2 py-1 text-slate-400 align-top">{idx + 1}</td>
+                    {ensaioItems.map(i => { const resp = respostaDe(i); const opts = opcoesDe(i); const key = `${idx}:${i.id}`; return (<td key={i.id} className="px-1 py-1 align-top">
+                      {resp === "valor" ? (<input disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-2 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent disabled:text-slate-400" />)
+                        : resp === "texto" ? (celulasAbertas.has(key) ? (<div className="min-w-48"><textarea autoFocus disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} onInput={autoGrow} rows={2} className="w-full px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 resize-none" /><button onClick={() => toggleCelula(key)} className="text-[11px] text-blue-700 mt-0.5">fechar</button></div>) : (<button onClick={() => toggleCelula(key)} className="text-xs text-blue-700 hover:text-blue-900 font-medium underline decoration-dotted">{(r[i.id] || "").trim() ? "editar texto" : "abrir"}</button>))
+                        : (<select disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-1 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent disabled:text-slate-400"><option value=""></option>{opts.map(op => <option key={op} value={op}>{op}</option>)}</select>)}
+                    </td>); })}
+                    <td className="px-1 py-1 align-top">{celulasAbertas.has(`${idx}:_obs`) ? (<div className="min-w-56"><textarea autoFocus disabled={readOnly} value={r._obs ?? ""} onChange={e => setEnsaioCell(idx, "_obs", e.target.value)} onInput={autoGrow} rows={2} placeholder="O que foi feito, observações…" className="w-full px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 resize-none" /><button onClick={() => toggleCelula(`${idx}:_obs`)} className="text-[11px] text-blue-700 mt-0.5">fechar</button></div>) : (<button onClick={() => toggleCelula(`${idx}:_obs`)} className="text-xs text-blue-700 hover:text-blue-900 font-medium underline decoration-dotted">{(r._obs || "").trim() ? "editar" : "abrir"}</button>)}</td>
+                    <td className="px-1 align-top">{!readOnly && <button onClick={() => delEnsaioRow(idx)} className="text-slate-300 hover:text-rose-500"><Trash2 size={14} /></button>}</td>
                   </tr>))}</tbody></table></div>
               )}
             </section>)}
@@ -590,11 +614,16 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
           <div><label className="text-xs text-slate-500 font-medium">Explicação simples (sempre visível)</label><textarea value={itemDraft.simples} onChange={e => setItemDraft({ ...itemDraft, simples: e.target.value })} placeholder="Explique em linguagem do dia a dia, sem jargão." className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 h-16" /></div>
           <div><label className="text-xs text-slate-500 font-medium">O que isso gera (detalhe técnico)</label><textarea value={itemDraft.gera} onChange={e => setItemDraft({ ...itemDraft, gera: e.target.value })} className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 h-14" /></div>
           <div><label className="text-xs text-slate-500 font-medium">Por que isso é importante? (detalhe técnico)</label><textarea value={itemDraft.porque} onChange={e => setItemDraft({ ...itemDraft, porque: e.target.value })} className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 h-14" /></div>
-          <div className="grid grid-cols-3 gap-2">
-            <div><label className="text-xs text-slate-500 font-medium">Captura</label><select value={itemDraft.captura} onChange={e => setItemDraft({ ...itemDraft, captura: e.target.value })} className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400">{Object.entries(CAPTURAS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></div>
-            <div><label className="text-xs text-slate-500 font-medium">Unidade</label><input value={itemDraft.unidade} onChange={e => setItemDraft({ ...itemDraft, unidade: e.target.value })} placeholder="ex.: m/s" className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" /></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-xs text-slate-500 font-medium">Tipo de resposta</label><select value={itemDraft.resposta} onChange={e => setItemDraft({ ...itemDraft, resposta: e.target.value })} className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400">{Object.entries(RESPOSTAS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></div>
             <div><label className="text-xs text-slate-500 font-medium">Escopo</label><select value={itemDraft.escopo} onChange={e => setItemDraft({ ...itemDraft, escopo: e.target.value })} className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400"><option value="ensaio">Por ensaio (planilha)</option><option value="sessao">Da sessão (uma vez)</option></select></div>
           </div>
+          {["verificacao", "ok_ajustar", "sim_nao", "opcoes"].includes(itemDraft.resposta) && (
+            <div><label className="text-xs text-slate-500 font-medium">Opções (separadas por vírgula)</label><input value={(itemDraft.opcoes && itemDraft.opcoes.length ? itemDraft.opcoes : RESPOSTAS[itemDraft.resposta]?.padrao || []).join(", ")} onChange={e => setItemDraft({ ...itemDraft, opcoes: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })} placeholder="ex.: Passou, Falhou, N/A" className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" /></div>
+          )}
+          {itemDraft.resposta === "valor" && (
+            <div><label className="text-xs text-slate-500 font-medium">Unidade</label><input value={itemDraft.unidade} onChange={e => setItemDraft({ ...itemDraft, unidade: e.target.value })} placeholder="ex.: m/s" className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" /></div>
+          )}
           <div>
             <label className="text-xs text-slate-500 font-medium">Modo do ensaio</label>
             <div className="flex gap-3 mt-1 text-sm text-slate-700">

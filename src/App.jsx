@@ -270,17 +270,21 @@ export default function App() {
     const ordem = (ORDEM_SUGERIDA[categoriaAtiva] || []).filter(o => blocosComSelecao.some(b => b.id === o.bloco))
       .map(o => { const b = blocos.find(x => x.id === o.bloco); return `<li><b>${esc(b?.titulo || o.bloco)}</b> — ${esc(o.nota)}</li>`; }).join("");
 
+    // Cada tipo de resposta ganha um campo proporcional ao que cabe escrever à mão:
+    // valor → linha sublinhada + unidade; texto → moldura pautada; opções → ☐/☑ + linha de Obs.
+    // Se um tipo acabar sem opções cadastradas, cai na moldura de texto — nenhum item fica sem campo.
     const linhaChecklist = (item) => {
       const v = sessaoValores[item.id] || {};
       const r = respostaDe(item);
       if (r === "valor") {
-        return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-line">${v.valor ? esc(v.valor) : ""}</span>${item.unidade ? `<span class="fs-unidade">${esc(item.unidade)}</span>` : ""}</div>`;
+        return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-line">${v.valor ? esc(v.valor) : ""}</span>${item.unidade ? `<span class="fs-unidade">${esc(item.unidade)}</span>` : ""}</div><div class="fs-obs fs-obs-curta">Obs.: <span class="fs-line-obs fs-line-obs-curta"></span></div>`;
       }
-      if (r === "texto") {
+      const opcoes = opcoesDe(item);
+      if (r === "texto" || !opcoes.length) {
         return `<div class="fs-texto"><div class="fs-texto-label">${esc(item.titulo)}</div><div class="fs-moldura">${v.valor ? esc(v.valor).replace(/\n/g, "<br>") : ""}</div></div>`;
       }
-      const opcoes = opcoesDe(item).map(op => `<span class="fs-check">${v.resultado === op ? "☑" : "☐"} ${esc(op)}</span>`).join("");
-      return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-opcoes">${opcoes}</span></div><div class="fs-obs">Obs.: <span class="fs-line-obs"></span></div>`;
+      const opcoesHTML = opcoes.map(op => `<span class="fs-check">${v.resultado === op ? "☑" : "☐"} ${esc(op)}</span>`).join("");
+      return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-opcoes">${opcoesHTML}</span></div><div class="fs-obs">Obs.: <span class="fs-line-obs"></span></div>`;
     };
     const gruposHTML = [...ordemIds, ...restantes].map(id => {
       const b = blocosComSelecao.find(x => x.id === id);
@@ -295,17 +299,35 @@ export default function App() {
     const TARGET_ROWS = 10;
     const linhasExtra = Math.max(0, TARGET_ROWS - ensaioRows.length);
     const obsEnsaiosHTML = ensaioRows.length ? ensaioRows.map((r, idx) => `<div class="fs-texto"><div class="fs-texto-label">Ensaio #${idx + 1} — O que foi feito</div><div class="fs-moldura">${r._obs ? esc(r._obs).replace(/\n/g, "<br>") : ""}</div></div>`).join("") : "";
-    const planilhaHTML = ensaioItems.length ? `<h2>Planilha de campo</h2><table class="fs-tabela"><tr><th>#</th>${ensaioItems.map(i => `<th>${esc(i.titulo)}${i.unidade ? ` (${esc(i.unidade)})` : ""}</th>`).join("")}</tr>${[
+    // Muitas colunas não cabem legíveis em retrato — a planilha vira paisagem sozinha nesse caso.
+    const paisagem = ensaioItems.length > 4;
+    const planilhaHTML = ensaioItems.length ? `<div class="fs-planilha-wrap${paisagem ? " fs-paisagem" : ""}"><h2>Planilha de campo</h2><table class="fs-tabela"><tr><th>#</th>${ensaioItems.map(i => `<th>${esc(i.titulo)}${i.unidade ? ` (${esc(i.unidade)})` : ""}</th>`).join("")}</tr>${[
       ...ensaioRows.map((r, idx) => `<tr><td>${idx + 1}</td>${ensaioItems.map(i => `<td>${esc(r[i.id] ?? "")}</td>`).join("")}</tr>`),
       ...Array.from({ length: linhasExtra }).map((_, k) => `<tr><td>${ensaioRows.length + k + 1}</td>${ensaioItems.map(() => `<td></td>`).join("")}</tr>`),
-    ].join("")}</table>${obsEnsaiosHTML}` : "";
+    ].join("")}</table>${obsEnsaiosHTML}</div>` : "";
+
+    const nomeMontou = currentExp?.ownerName || currentUser?.name || "";
+    const assinaturasHTML = `<div class="fs-assinaturas"><h2>Assinaturas</h2>
+<div class="fs-assin-bloco"><div class="fs-assin-titulo">Responsável por montar este checklist</div><div class="fs-assin-linha">
+<div class="fs-assin-campo"><div class="lbl">Nome</div><div class="val">${esc(nomeMontou)}</div></div>
+<div class="fs-assin-campo"><div class="lbl">Assinatura</div><div class="val">&nbsp;</div></div>
+</div></div>
+<div class="fs-assin-bloco"><div class="fs-assin-titulo">Responsável por preencher este checklist</div><div class="fs-assin-linha">
+<div class="fs-assin-campo"><div class="lbl">Nome</div><div class="val">${esc(meta.responsavel || "")}</div></div>
+<div class="fs-assin-campo"><div class="lbl">Assinatura</div><div class="val">&nbsp;</div></div>
+</div></div>
+<div class="fs-assin-linha">
+<div class="fs-assin-campo" style="flex:0 0 220px"><div class="lbl">Data</div><div class="val">____ / ____ / ________</div></div>
+${meta.local ? "" : `<div class="fs-assin-campo"><div class="lbl">Local</div><div class="val">&nbsp;</div></div>`}
+</div></div>`;
 
     return `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Folha de Campo — Hydrone</title><style>
 @page{size:A4;margin:14mm}
+@page paisagem{size:A4 landscape;margin:10mm}
 body{font-family:Arial,sans-serif;color:#1e293b;max-width:760px;margin:24px auto;padding:0 24px}
 h1{font-size:20px;color:#1e40af;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px}
 .sub{font-size:12px;color:#64748b;margin:0 0 10px}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#1e40af;margin:20px 0 6px;page-break-after:avoid}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#1e40af;margin:20px 0 6px;page-break-after:avoid;break-after:avoid}
 table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0}
 td,th{text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0}
 .meta td:first-child{color:#64748b;width:160px}
@@ -313,23 +335,38 @@ p{font-size:13px;line-height:1.5;margin:4px 0}
 .foot{font-size:11px;color:#94a3b8;margin-top:24px;border-top:1px solid #e2e8f0;padding-top:8px}
 .cat-badge{display:inline-block;font-size:11px;font-weight:700;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:2px 8px;margin:2px 4px 14px 0}
 .fs-resumo{font-size:12px;font-weight:700;color:#1e293b;background:#f1f5f9;border-radius:6px;padding:6px 10px;margin:0 0 10px;display:inline-block}
-.fs-grupo{margin:12px 0;page-break-inside:avoid}
+.fs-grupo{margin:12px 0;page-break-inside:avoid;break-inside:avoid}
 .fs-grupo h3{font-size:12px;color:#1e40af;margin:0 0 4px;border-bottom:1px solid #dbeafe;padding-bottom:2px}
 .fs-fonte{font-weight:400;color:#94a3b8;font-size:10px}
-.fs-item{display:flex;align-items:baseline;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px dotted #e2e8f0}
+.fs-item{display:flex;align-items:baseline;gap:10px;font-size:12px;padding:4px 0 2px}
 .fs-label{flex:1}
-.fs-line{flex:0 0 140px;border-bottom:1px solid #94a3b8;min-height:14px}
-.fs-unidade{color:#94a3b8;font-size:10px;width:26px}
+.fs-line{flex:0 0 40mm;border-bottom:1px solid #94a3b8;min-height:14px}
+.fs-unidade{color:#64748b;font-size:11px}
 .fs-opcoes{font-size:11px;color:#334155;white-space:nowrap}
 .fs-check{margin-left:10px}
-.fs-obs{font-size:10px;color:#94a3b8;padding:0 0 5px;display:flex;align-items:center;gap:6px}
-.fs-line-obs{flex:1;border-bottom:1px dotted #cbd5e1;min-height:12px}
-.fs-texto{margin:4px 0 8px;page-break-inside:avoid}
+.fs-obs{font-size:11px;color:#64748b;display:flex;align-items:flex-end;gap:6px;padding:0 0 8px;margin-bottom:6px;border-bottom:1px dotted #e2e8f0}
+.fs-line-obs{flex:1;border-bottom:1px solid #94a3b8;height:10mm}
+.fs-obs-curta{padding-bottom:4px}
+.fs-line-obs-curta{height:6mm;flex:0 0 60%}
+.fs-texto{margin:4px 0 10px;page-break-inside:avoid;break-inside:avoid}
 .fs-texto-label{font-size:12px;font-weight:600;margin-bottom:3px}
-.fs-moldura{border:1px solid #cbd5e1;border-radius:4px;padding:8px;min-height:60px;font-size:12px;line-height:1.5;white-space:pre-wrap}
-.fs-tabela td{height:22px}
+.fs-moldura{border:1px solid #94a3b8;border-radius:4px;padding:8px 8px 4px;min-height:24mm;font-size:12px;line-height:7mm;white-space:pre-wrap;background-image:repeating-linear-gradient(to bottom,transparent,transparent calc(7mm - 1px),#dbeafe calc(7mm - 1px),#dbeafe 7mm);background-position:0 7mm}
+.fs-planilha-wrap{margin-top:10px}
+.fs-paisagem{page:paisagem;page-break-before:always;break-before:page}
+.fs-tabela{border-collapse:collapse;table-layout:auto}
+.fs-tabela th,.fs-tabela td{border:1px solid #333;padding:4px 6px}
+.fs-tabela th{font-size:9.5px;font-weight:700;color:#1e293b;background:#f1f5f9;white-space:normal;line-height:1.25;vertical-align:bottom}
+.fs-tabela td{height:10mm;font-size:11px;vertical-align:top}
+.fs-tabela th:first-child,.fs-tabela td:first-child{width:8mm;text-align:center}
 .fs-tabela{page-break-inside:auto}
-.fs-tabela tr{page-break-inside:avoid}
+.fs-tabela tr{page-break-inside:avoid;break-inside:avoid}
+.fs-assinaturas{margin-top:28px;padding-top:14px;border-top:2px solid #1d4ed8;page-break-inside:avoid;break-inside:avoid}
+.fs-assin-bloco{margin:14px 0;page-break-inside:avoid;break-inside:avoid}
+.fs-assin-titulo{font-size:12px;font-weight:700;color:#1e293b;margin-bottom:10px}
+.fs-assin-linha{display:flex;gap:24px;flex-wrap:wrap}
+.fs-assin-campo{flex:1;min-width:160px}
+.fs-assin-campo .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:#64748b;font-weight:700;margin-bottom:14px}
+.fs-assin-campo .val{border-bottom:1px solid #94a3b8;min-height:16px;padding:2px 2px 4px;font-size:13px}
 @media print{body{margin:0}}
 </style></head><body>
 <div style="display:flex;align-items:center;gap:10px;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px"><img src="/hydrone-mark.png" alt="Hydrone" style="height:34px;width:34px"><h1 style="border:0;margin:0;padding:0">Folha de Campo</h1></div><p class="sub">${esc(meta.nome || "Sem nome")} · Planejador de Experimentos Hydrone</p><span class="cat-badge">${esc(categoriaMeta(categoriaAtiva).label)}</span><span class="cat-badge">${esc(resumoModoFases(categoriaAtiva, meta))}</span>
@@ -340,6 +377,7 @@ ${ordem ? `<h2>Sugestão de ordem em campo</h2><ol style="font-size:13px;padding
 <h2>Checklist</h2>${gruposHTML || "<p>Nenhum requisito marcado.</p>"}
 ${planilhaHTML}
 ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
+${assinaturasHTML}
 <p class="foot">Gerado em ${esc(new Date().toLocaleString("pt-BR"))}</p></body></html>`;
   };
   const printReport = () => {

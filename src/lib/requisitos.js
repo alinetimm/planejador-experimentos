@@ -38,6 +38,21 @@ export const CATEGORIAS = [
 ];
 export const CATEGORIA_PADRAO = "manobra";
 
+// Fases da missão híbrida do Hydrone-J (categoria "veiculo"). Substitui o seletor de
+// modo voo/sub/os-dois só nessa categoria — o meio (aéreo/subaquático) de cada item é
+// derivado da união dos meios das fases marcadas (Transição conta para os dois).
+export const FASES_MISSAO = [
+  { id: "decolagem", label: "Decolagem", meios: ["voo"] },
+  { id: "pairado", label: "Pairado (hover)", meios: ["voo"] },
+  { id: "transicao", label: "Transição", meios: ["voo", "sub"] },
+  { id: "cruzeiro", label: "Voo/Cruzeiro", meios: ["voo"] },
+  { id: "navegacao", label: "Navegação", meios: ["sub"] },
+  { id: "submersao", label: "Submersão", meios: ["sub"] },
+  { id: "deslocamento_sub", label: "Deslocamento subaquático", meios: ["sub"] },
+  { id: "retorno_superficie", label: "Retorno à superfície", meios: ["sub"] },
+  { id: "pouso", label: "Pouso", meios: ["voo"] },
+];
+
 let _iid = 0;
 const uid = () => `r${Date.now().toString(36)}${(_iid++).toString(36)}`;
 

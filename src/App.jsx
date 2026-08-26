@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import {
   Waves, Gauge, Rocket, ClipboardList, ClipboardCheck, Download, Upload, Plus, Trash2, BookOpen, ChevronDown,
   User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileJson, FileText,
-  DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Table2,
+  DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Table2, Copy,
 } from "lucide-react";
 import * as cloud from "./cloud";
 import { download, toCSV } from "./lib/stats";
@@ -134,7 +134,7 @@ export default function App() {
     setBusy(true);
     try {
       const t = (title || currentExp?.title || meta.nome || "Sem título").toString().trim().slice(0, 120) || "Sem título";
-      const id = await cloud.saveExperiment({ id: currentExp?.id, title: t, modo: categoriaAtiva, kind: "protocolo", bundle: bundle() });
+      const id = await cloud.saveExperiment({ id: currentExp?.id, title: t, modo: categoriaAtiva, kind: "protocolo", responsavel: meta.responsavel || "", data: meta.data || "", resumoModo: resumoModoFases(categoriaAtiva, meta), bundle: bundle() });
       setCurrentExp(prev => ({ id, title: t, ownerId: prev?.ownerId || currentUser.uid, ownerName: prev?.ownerName || currentUser.name, editors: prev?.editors || [] }));
       flash("Salvo na nuvem");
     } catch { flash("Não foi possível salvar (sem permissão?)"); }
@@ -151,6 +151,19 @@ export default function App() {
       setStep(1); flash(`"${full.title}" aberto${cloud.canEdit({ ownerId: full.ownerId, editors: full.editors }, currentUser?.uid, isAdmin) ? "" : " (somente leitura)"}`);
     } catch { flash("Erro ao abrir o experimento"); }
     setBusy(false); setShowSaves(false);
+  };
+  const duplicarComoModelo = async (summary) => {
+    setBusy(true);
+    try {
+      const full = await cloud.getExperiment(summary.id);
+      if (full?.bundle) {
+        applyBundle({ ...full.bundle, ensaioRows: [], sessaoValores: {}, meta: { ...full.bundle.meta, nome: full.bundle.meta?.nome ? `${full.bundle.meta.nome} (cópia)` : "", data: today() } });
+      }
+      setCurrentExp(null);
+      setStep(1); setShowSaves(false);
+      flash("Modelo duplicado — checklist pronto, dados em branco");
+    } catch { flash("Erro ao duplicar"); }
+    setBusy(false);
   };
   const removeExperiment = async (summary) => {
     if (!window.confirm(`Excluir "${summary.title}"? Esta ação não pode ser desfeita.`)) return;
@@ -235,7 +248,7 @@ export default function App() {
     return [...map.values()];
   }, [sessaoItems]);
   const sessaoVerificados = sessaoItems.filter(itemVerificado).length;
-  const sessaoFalhas = sessaoItems.filter(i => (sessaoValores[i.id] || {}).resultado === "Falhou").length;
+  const sessaoFalhas = sessaoItems.filter(i => ["Falhou", "Não", "Refazer"].includes((sessaoValores[i.id] || {}).resultado)).length;
 
   const setSessaoValor = (itemId, patch) => setSessaoValores(v => ({ ...v, [itemId]: { ...(v[itemId] || {}), ...patch } }));
   const addEnsaioRow = () => setEnsaioRows(rs => [...rs, Object.fromEntries(ensaioItems.map(i => [i.id, ""]))]);
@@ -276,6 +289,9 @@ export default function App() {
       return `<div class="fs-grupo"><h3>${esc(b.titulo)}${b.fonte ? ` <span class="fs-fonte">· ${esc(b.fonte)}</span>` : ""}</h3>${itensSessao.map(linhaChecklist).join("")}</div>`;
     }).join("");
 
+    const medidas = selectedFlat.filter(i => respostaDe(i) === "valor").length;
+    const resumoHTML = `<p class="fs-resumo">${sessaoVerificados}/${sessaoItems.length} verificados${sessaoFalhas ? ` · ${sessaoFalhas} ${sessaoFalhas === 1 ? "falhou" : "falharam"}` : ""} · ${medidas} ${medidas === 1 ? "medida" : "medidas"} · ${ensaioRows.length} ${ensaioRows.length === 1 ? "ensaio" : "ensaios"}</p>`;
+
     const TARGET_ROWS = 10;
     const linhasExtra = Math.max(0, TARGET_ROWS - ensaioRows.length);
     const obsEnsaiosHTML = ensaioRows.length ? ensaioRows.map((r, idx) => `<div class="fs-texto"><div class="fs-texto-label">Ensaio #${idx + 1} — O que foi feito</div><div class="fs-moldura">${r._obs ? esc(r._obs).replace(/\n/g, "<br>") : ""}</div></div>`).join("") : "";
@@ -296,6 +312,7 @@ td,th{text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0}
 p{font-size:13px;line-height:1.5;margin:4px 0}
 .foot{font-size:11px;color:#94a3b8;margin-top:24px;border-top:1px solid #e2e8f0;padding-top:8px}
 .cat-badge{display:inline-block;font-size:11px;font-weight:700;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:2px 8px;margin:2px 4px 14px 0}
+.fs-resumo{font-size:12px;font-weight:700;color:#1e293b;background:#f1f5f9;border-radius:6px;padding:6px 10px;margin:0 0 10px;display:inline-block}
 .fs-grupo{margin:12px 0;page-break-inside:avoid}
 .fs-grupo h3{font-size:12px;color:#1e40af;margin:0 0 4px;border-bottom:1px solid #dbeafe;padding-bottom:2px}
 .fs-fonte{font-weight:400;color:#94a3b8;font-size:10px}
@@ -318,6 +335,7 @@ p{font-size:13px;line-height:1.5;margin:4px 0}
 <div style="display:flex;align-items:center;gap:10px;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px"><img src="/hydrone-mark.png" alt="Hydrone" style="height:34px;width:34px"><h1 style="border:0;margin:0;padding:0">Folha de Campo</h1></div><p class="sub">${esc(meta.nome || "Sem nome")} · Planejador de Experimentos Hydrone</p><span class="cat-badge">${esc(categoriaMeta(categoriaAtiva).label)}</span><span class="cat-badge">${esc(resumoModoFases(categoriaAtiva, meta))}</span>
 ${meta.descricao ? `<h2>Descrição</h2><p>${esc(meta.descricao)}</p>` : ""}
 <table class="meta"><tr><td>Responsável</td><td>${esc(meta.responsavel || currentUser?.name || "")}</td></tr><tr><td>Data</td><td>${esc(meta.data)}</td></tr>${meta.equipamento ? `<tr><td>Equipamento</td><td>${esc(meta.equipamento)}</td></tr>` : ""}${meta.local ? `<tr><td>Local</td><td>${esc(meta.local)}</td></tr>` : ""}<tr><td>Ensaio nº</td><td class="fs-line" style="display:inline-block;width:140px"></td></tr></table>
+${resumoHTML}
 ${ordem ? `<h2>Sugestão de ordem em campo</h2><ol style="font-size:13px;padding-left:18px">${ordem}</ol>` : ""}
 <h2>Checklist</h2>${gruposHTML || "<p>Nenhum requisito marcado.</p>"}
 ${planilhaHTML}
@@ -656,9 +674,17 @@ ${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
               <button onClick={() => openExperiment(x)} className="flex-1 text-left min-w-0">
                 <div className="text-sm font-medium text-slate-800 truncate">{x.title}</div>
                 <div className="text-xs text-slate-400 flex items-center gap-1.5"><User size={11} /> {mine ? "você" : x.ownerName} · {dt}{!editable && <span className="flex items-center gap-0.5 text-slate-400"><Lock size={10} /> leitura</span>}{editable && !mine && <span className="text-blue-600">editor</span>}</div>
-                <span className="inline-block text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5 mt-1">{categoriaMeta(x.modo).label}</span>
+                <div className="flex flex-wrap items-center gap-1 mt-1">
+                  <span className="inline-block text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">{categoriaMeta(x.modo).label}</span>
+                  {x.resumoModo && <span className="inline-block text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 rounded-full px-2 py-0.5">{x.resumoModo}</span>}
+                  {x.data && <span className="text-[10px] text-slate-400">{x.data}</span>}
+                  {x.responsavel && <span className="text-[10px] text-slate-400">· {x.responsavel}</span>}
+                </div>
               </button>
-              {(isAdmin || mine) && <button onClick={() => removeExperiment(x)} title="Excluir" className="text-slate-300 hover:text-rose-500 p-1 shrink-0"><Trash2 size={15} /></button>}
+              <div className="flex flex-col gap-1 shrink-0">
+                <button onClick={() => duplicarComoModelo(x)} title="Duplicar como modelo (sem os dados preenchidos)" className="text-slate-400 hover:text-blue-600 p-1"><Copy size={15} /></button>
+                {(isAdmin || mine) && <button onClick={() => removeExperiment(x)} title="Excluir" className="text-slate-300 hover:text-rose-500 p-1"><Trash2 size={15} /></button>}
+              </div>
             </li>); })}</ul>); })()}
       </div></div>)}
 

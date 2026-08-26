@@ -94,6 +94,7 @@ function expSummary(d) {
   const x = d.data();
   return {
     id: d.id, title: x.title, modo: x.modo, kind: x.kind,
+    responsavel: x.responsavel || "", data: x.data || "", resumoModo: x.resumoModo || "",
     ownerId: x.ownerId, ownerName: x.ownerName, editors: x.editors || [],
     createdAt: x.createdAt, updatedAt: x.updatedAt,
   };
@@ -122,11 +123,11 @@ export async function getExperiment(id) {
 
 // Cria (sem id) ou atualiza (com id). `bundle` é o objeto de estado do app.
 // title/modo/kind ficam no topo do doc para alimentar a lista sem baixar o bundle inteiro.
-export async function saveExperiment({ id, title, modo, kind, bundle }) {
+export async function saveExperiment({ id, title, modo, kind, responsavel, data, resumoModo, bundle }) {
   const bundleJson = JSON.stringify(bundle ?? {});
   if (id) {
     await updateDoc(doc(db, "experiments", id), {
-      title, modo, kind, bundleJson, updatedAt: serverTimestamp(),
+      title, modo, kind, responsavel, data, resumoModo, bundleJson, updatedAt: serverTimestamp(),
     });
     return id;
   }
@@ -135,7 +136,7 @@ export async function saveExperiment({ id, title, modo, kind, bundle }) {
   const refd = await addDoc(expCol(), {
     ownerId: u.uid,
     ownerName: profile?.name || u.displayName || "Sem nome",
-    title, modo, kind, bundleJson,
+    title, modo, kind, responsavel, data, resumoModo, bundleJson,
     editors: [],
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),

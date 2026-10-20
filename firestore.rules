@@ -1,0 +1,61 @@
+rules_version = '2';
+
+// Regras do Planejador de Experimentos — Hydrone
+//
+// Modelo: todo mundo autenticado LÊ tudo (o time compartilha os protocolos);
+// escrever exige ser dono, editor ou admin. `role` e `editors` nunca são
+// escritos pelo cliente fora das transições previstas.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function autenticado()  { return request.auth != null; }
+    function admin()        { return autenticado() && request.auth.token.admin == true; }
+    function eu()           { return request.auth.uid; }
+
+    function podeEditarExp(expId) {
+      let e = get(/databases/$(database)/documents/experiments/$(expId)).data;
+      return admin() || e.ownerId == eu() || (e.editors is list && eu() in e.editors);
+    }
+
+    match /profiles/{uid} {
+      allow read: if autenticado();
+      allow create: if autenticado() && uid == eu()
+                    && request.resource.data.role == "member";
+      // O cliente atualiza nome/email/foto; `role` só muda por custom claim/console.
+      allow update: if autenticado() && uid == eu()
+                    && request.resource.data.role == resource.data.role;
+      allow delete: if admin();
+    }
+
+    match /experiments/{expId} {
+      allow read: if autenticado();
+      allow create: if autenticado()
+                    && request.resource.data.ownerId == eu()
+                    && request.resource.data.editors.size() == 0;
+      // Dono e admin podem mexer em tudo, inclusive na lista de editores.
+      // Editor pode salvar conteúdo, mas não se promover nem trocar o dono.
+      allow update: if admin()
+                    || resource.data.ownerId == eu()
+                    || (eu() in resource.data.editors
+                        && request.resource.data.ownerId == resource.data.ownerId
+                        && request.resource.data.editors == resource.data.editors);
+      allow delete: if admin() || resource.data.ownerId == eu();
+
+      // Anexos: metadados criados pelo cliente, campo `drive` preenchido pela
+      // Cloud Function (que roda com privilégio de admin e ignora estas regras).
+      match /attachments/{anexoId} {
+        allow read: if autenticado();
+        allow create: if podeEditarExp(expId)
+                      && request.resource.data.uploadedBy == eu()
+                      && request.resource.data.drive.status == "pendente";
+        allow update, delete: if podeEditarExp(expId);
+      }
+    }
+
+    // Cache de ids de pasta do Drive — escrito exclusivamente pela Cloud Function.
+    match /drive_folders/{chave} {
+      allow read, write: if false;
+    }
+  }
+}

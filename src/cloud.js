@@ -7,7 +7,7 @@ import {
   collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
   query, orderBy, onSnapshot, serverTimestamp, arrayUnion, arrayRemove,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { normalizarVacuo, migrarCategoria } from "./lib/vacuo";
 
 
@@ -173,27 +173,45 @@ export function canEdit(exp, uid, admin) {
 }
 
 // ──────────────────────── ANEXOS ────────────────────────
-// Fotos e logs ligados a um experimento (e, opcionalmente, a um item de checklist via itemId).
-// Caminho no Storage: attachments/{uid}/{expId}/{timestamp}-{arquivo}
-// As regras de Storage só permitem escrever dentro do próprio uid; a permissão de
-// "editor do experimento" é validada na criação do doc de metadados (regras de Firestore).
+// Fotos, vídeos e logs ligados a um experimento (e, opcionalmente, a um item de
+// checklist via itemId).
+//
+// Fluxo em dois saltos — ver functions/index.js:
+//   1. navegador → Firebase Storage (resumable, com progresso)
+//      caminho: attachments/{uid}/{expId}/{timestamp}-{arquivo}
+//   2. Cloud Function dispara no finalize, copia para o Google Drive em
+//      Hydrone/{data do experimento}/{tipo de experimento} e grava fileId,
+//      name, mimeType e webViewLink de volta no doc do anexo.
+//
+// O campo `drive.status` percorre: "pendente" → "enviando" → "ok" | "erro".
+// A UI mostra o link do Drive quando chega "ok"; até lá, o arquivo já está
+// seguro no Storage e visível pela URL de download.
 
 function inferKind(file) {
   const n = (file.name || "").toLowerCase();
   if (file.type?.startsWith("image/")) return "photo";
+  if (file.type?.startsWith("video/")) return "video";
   if (n.endsWith(".bin") || n.endsWith(".tlog") || n.endsWith(".log")) return "log";
   return "outro";
 }
 
-export async function uploadAttachment(expId, file, { itemId = null } = {}) {
+/**
+ * Upload resumable com progresso.
+ * @param {string} expId
+ * @param {File} file
+ * @param {{itemId?: string|null, onProgress?: (pct:number)=>void}} opts
+ */
+export async function uploadAttachment(expId, file, { itemId = null, onProgress } = {}) {
   const u = auth.currentUser;
   if (!u) throw new Error("Não autenticado.");
   const kind = inferKind(file);
   const safe = (file.name || "arquivo").replace(/[^\w.\-]+/g, "_");
   const path = `attachments/${u.uid}/${expId}/${Date.now()}-${safe}`;
   const sref = ref(storage, path);
-  await uploadBytes(sref, file, { contentType: file.type || "application/octet-stream" });
-  const url = await getDownloadURL(sref);
+
+  // O doc nasce ANTES do upload: a Cloud Function dispara no finalize e procura
+  // o doc por storagePath. Criado depois, ele quase sempre perderia a corrida e
+  // o arquivo nunca seria copiado para o Drive.
   const refd = await addDoc(collection(db, "experiments", expId, "attachments"), {
     type: file.type?.startsWith("image/") ? "photo" : "file",
     kind, itemId,
@@ -201,10 +219,33 @@ export async function uploadAttachment(expId, file, { itemId = null } = {}) {
     contentType: file.type || "application/octet-stream",
     size: file.size || 0,
     storagePath: path,
-    url,
+    url: null,
     uploadedBy: u.uid,
+    drive: { status: "pendente", fileId: null, name: null, mimeType: null, webViewLink: null },
     createdAt: serverTimestamp(),
   });
+
+  const task = uploadBytesResumable(sref, file, {
+    contentType: file.type || "application/octet-stream",
+    // Lido pela Cloud Function: evita que ela precise adivinhar a que
+    // experimento e a que item do checklist o arquivo pertence.
+    customMetadata: { expId, uid: u.uid, itemId: itemId || "", kind },
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      task.on("state_changed",
+        (snap) => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+        reject,
+        resolve);
+    });
+  } catch (e) {
+    await deleteDoc(refd).catch(() => {});
+    throw e;
+  }
+
+  const url = await getDownloadURL(sref);
+  await updateDoc(refd, { url });
   return { id: refd.id, kind, fileName: file.name, url, storagePath: path };
 }
 

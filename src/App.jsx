@@ -9,6 +9,7 @@ import { download, toCSV } from "./lib/stats";
 import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORDEM_SUGERIDA, RESPOSTAS, respostaDe, opcoesDe, CATEGORIAS, CATEGORIA_PADRAO, FASES_MISSAO } from "./lib/requisitos";
 import AnalisarDados from "./AnalisarDados";
 import TesteVacuo from "./TesteVacuo";
+import Anexos from "./Anexos";
 import { VACUO_DEF, exigeTesteVacuo, migrarCategoria, statusEstanqueidade, quedaPressao, ROTULO_STATUS, UNIDADE_PRESSAO, num } from "./lib/vacuo";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -518,6 +519,8 @@ ${assinaturasHTML}
           {exigeTesteVacuo(categoriaAtiva) && (
             <TesteVacuo valor={testeVacuo} onChange={setTesteVacuo} readOnly={readOnly} />
           )}
+
+          <Anexos expId={currentExp?.id} readOnly={readOnly} onFlash={flash} />
 
           {currentExp?.id && isOwnerCurrent && (<section className="bg-white rounded-xl border border-slate-200 p-4">
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Share2 size={13} className="text-blue-700" /> Compartilhar edição</h3>

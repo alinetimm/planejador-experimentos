@@ -1,0 +1,19 @@
+{
+  "name": "hydrone-functions",
+  "description": "Cloud Functions do Planejador de Experimentos — espelhamento de anexos no Google Drive",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "serve": "firebase emulators:start --only functions",
+    "logs": "firebase functions:log",
+    "deploy": "firebase deploy --only functions"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.2",
+    "firebase-functions": "^6.3.0",
+    "googleapis": "^144.0.0"
+  },
+  "private": true
+}

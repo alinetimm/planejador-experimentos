@@ -8,6 +8,7 @@ import {
   query, orderBy, onSnapshot, serverTimestamp, arrayUnion, arrayRemove,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { normalizarVacuo, migrarCategoria } from "./lib/vacuo";
 
 
 export function watchAuth(callback) {
@@ -90,11 +91,14 @@ export async function listProfiles() {
 const expCol = () => collection(db, "experiments");
 
 // Lista resumida para a tabela compartilhada (todos os usuários autenticados leem tudo).
+// `statusEstanqueidade` fica no topo do doc para a lista mostrar o resultado do
+// teste de vácuo sem precisar baixar o bundle inteiro.
 function expSummary(d) {
   const x = d.data();
   return {
-    id: d.id, title: x.title, modo: x.modo, kind: x.kind,
+    id: d.id, title: x.title, modo: migrarCategoria(x.modo), kind: x.kind,
     responsavel: x.responsavel || "", data: x.data || "", resumoModo: x.resumoModo || "",
+    statusEstanqueidade: x.statusEstanqueidade || null,
     ownerId: x.ownerId, ownerName: x.ownerName, editors: x.editors || [],
     createdAt: x.createdAt, updatedAt: x.updatedAt,
   };
@@ -118,17 +122,25 @@ export async function getExperiment(id) {
   const x = snap.data();
   let bundle = null;
   try { bundle = x.bundleJson ? JSON.parse(x.bundleJson) : null; } catch { bundle = null; }
+  if (bundle) bundle.categoria = migrarCategoria(bundle.categoria);
   return { id: snap.id, ...x, bundle };
 }
 
 // Cria (sem id) ou atualiza (com id). `bundle` é o objeto de estado do app.
 // title/modo/kind ficam no topo do doc para alimentar a lista sem baixar o bundle inteiro.
+// `testeVacuo` é gravado DESNORMALIZADO (números, não strings) além de dentro do
+// bundle, porque a Cloud Function e eventuais consultas por vazamento o leem daqui.
 export async function saveExperiment({ id, title, modo, kind, responsavel, data, resumoModo, bundle }) {
   const bundleJson = JSON.stringify(bundle ?? {});
+  const vacuo = normalizarVacuo(bundle?.testeVacuo);
+  const campos = {
+    title, modo, kind, responsavel, data, resumoModo, bundleJson,
+    testeVacuo: vacuo,
+    statusEstanqueidade: vacuo ? vacuo.statusEstanqueidade : null,
+    updatedAt: serverTimestamp(),
+  };
   if (id) {
-    await updateDoc(doc(db, "experiments", id), {
-      title, modo, kind, responsavel, data, resumoModo, bundleJson, updatedAt: serverTimestamp(),
-    });
+    await updateDoc(doc(db, "experiments", id), campos);
     return id;
   }
   const u = auth.currentUser;
@@ -136,10 +148,9 @@ export async function saveExperiment({ id, title, modo, kind, responsavel, data,
   const refd = await addDoc(expCol(), {
     ownerId: u.uid,
     ownerName: profile?.name || u.displayName || "Sem nome",
-    title, modo, kind, responsavel, data, resumoModo, bundleJson,
     editors: [],
     createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+    ...campos,
   });
   return refd.id;
 }

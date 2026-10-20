@@ -8,6 +8,8 @@ import * as cloud from "./cloud";
 import { download, toCSV } from "./lib/stats";
 import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORDEM_SUGERIDA, RESPOSTAS, respostaDe, opcoesDe, CATEGORIAS, CATEGORIA_PADRAO, FASES_MISSAO } from "./lib/requisitos";
 import AnalisarDados from "./AnalisarDados";
+import TesteVacuo from "./TesteVacuo";
+import { VACUO_DEF, exigeTesteVacuo, migrarCategoria, statusEstanqueidade, quedaPressao, ROTULO_STATUS, UNIDADE_PRESSAO, num } from "./lib/vacuo";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const META_DEF = { nome: "", descricao: "", responsavel: "", data: today(), equipamento: "", local: "", notas: "", modoEnsaio: "os_dois", fases: [] };
@@ -78,6 +80,7 @@ export default function App() {
   const [selecionados, setSelecionados] = useState(() => new Set());
   const [ensaioRows, setEnsaioRows] = useState([]);
   const [sessaoValores, setSessaoValores] = useState({});
+  const [testeVacuo, setTesteVacuo] = useState({ ...VACUO_DEF });
   const [detalheAbertos, setDetalheAbertos] = useState(() => new Set());
   const [explicacaoAbertos, setExplicacaoAbertos] = useState(() => new Set());
   const [gruposAlternados, setGruposAlternados] = useState(() => new Set());
@@ -89,13 +92,15 @@ export default function App() {
 
   useEffect(() => { saveBlocos(blocos); }, [blocos]);
 
-  const bundle = () => ({ meta, categoria: categoriaAtiva, selecionados: [...selecionados], ensaioRows, sessaoValores });
+  const bundle = () => ({ meta, categoria: categoriaAtiva, selecionados: [...selecionados], ensaioRows, sessaoValores, testeVacuo });
   const applyBundle = (b) => {
     setMeta(b?.meta ? { ...META_DEF, ...b.meta } : { ...META_DEF });
-    setCategoriaAtiva(b?.categoria || CATEGORIA_PADRAO);
+    // migrarCategoria mantém compatíveis os bundles salvos antes da renomeação.
+    setCategoriaAtiva(migrarCategoria(b?.categoria) || CATEGORIA_PADRAO);
     setSelecionados(new Set(b?.selecionados || []));
     setEnsaioRows(b?.ensaioRows || []);
     setSessaoValores(b?.sessaoValores || {});
+    setTesteVacuo({ ...VACUO_DEF, ...(b?.testeVacuo || {}) });
   };
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2200); };
 
@@ -157,7 +162,9 @@ export default function App() {
     try {
       const full = await cloud.getExperiment(summary.id);
       if (full?.bundle) {
-        applyBundle({ ...full.bundle, ensaioRows: [], sessaoValores: {}, meta: { ...full.bundle.meta, nome: full.bundle.meta?.nome ? `${full.bundle.meta.nome} (cópia)` : "", data: today() } });
+        // Modelo = checklist reaproveitado, medições zeradas. As leituras do
+        // teste de vácuo são de uma cápsula num dia específico: não se herdam.
+        applyBundle({ ...full.bundle, ensaioRows: [], sessaoValores: {}, testeVacuo: null, meta: { ...full.bundle.meta, nome: full.bundle.meta?.nome ? `${full.bundle.meta.nome} (cópia)` : "", data: today() } });
       }
       setCurrentExp(null);
       setStep(1); setShowSaves(false);
@@ -296,6 +303,20 @@ export default function App() {
     const medidas = selectedFlat.filter(i => respostaDe(i) === "valor").length;
     const resumoHTML = `<p class="fs-resumo">${sessaoVerificados}/${sessaoItems.length} verificados${sessaoFalhas ? ` · ${sessaoFalhas} ${sessaoFalhas === 1 ? "falhou" : "falharam"}` : ""} · ${medidas} ${medidas === 1 ? "medida" : "medidas"} · ${ensaioRows.length} ${ensaioRows.length === 1 ? "ensaio" : "ensaios"}</p>`;
 
+    // Teste de vácuo: entra na folha impressa como registro assinável do
+    // pré-check de estanqueidade, com as duas leituras e o ΔP calculado.
+    const vacuoStatus = statusEstanqueidade(testeVacuo);
+    const vacuoDelta = quedaPressao(testeVacuo);
+    const vacuoHTML = exigeTesteVacuo(categoriaAtiva) ? `<h2>Teste de vácuo da cápsula</h2>
+<table class="meta">
+<tr><td>Executado</td><td>${testeVacuo.realizado ? "Sim" : "Não"}</td></tr>
+<tr><td>Pressão inicial</td><td>${testeVacuo.pressaoInicial !== "" ? `${esc(testeVacuo.pressaoInicial)} ${UNIDADE_PRESSAO}` : "____________"}</td></tr>
+<tr><td>Pressão final (${esc(testeVacuo.tempoDecorridoMinutos)} min)</td><td>${testeVacuo.pressaoFinal !== "" ? `${esc(testeVacuo.pressaoFinal)} ${UNIDADE_PRESSAO}` : "____________"}</td></tr>
+<tr><td>Queda (ΔP)</td><td><b>${vacuoDelta === null ? "____________" : `${vacuoDelta.toFixed(1)} ${UNIDADE_PRESSAO}`}</b> · tolerância ${esc(num(testeVacuo.limiteQueda))} ${UNIDADE_PRESSAO}</td></tr>
+<tr><td>Estanqueidade</td><td><b>${esc(ROTULO_STATUS[vacuoStatus])}</b></td></tr>
+${testeVacuo.observacoes ? `<tr><td>Observações</td><td>${esc(testeVacuo.observacoes)}</td></tr>` : ""}
+</table>` : "";
+
     const TARGET_ROWS = 10;
     const linhasExtra = Math.max(0, TARGET_ROWS - ensaioRows.length);
     const obsEnsaiosHTML = ensaioRows.length ? ensaioRows.map((r, idx) => `<div class="fs-texto"><div class="fs-texto-label">Ensaio #${idx + 1} — O que foi feito</div><div class="fs-moldura">${r._obs ? esc(r._obs).replace(/\n/g, "<br>") : ""}</div></div>`).join("") : "";
@@ -373,6 +394,7 @@ p{font-size:13px;line-height:1.5;margin:4px 0}
 ${meta.descricao ? `<h2>Descrição</h2><p>${esc(meta.descricao)}</p>` : ""}
 <table class="meta"><tr><td>Responsável</td><td>${esc(meta.responsavel || currentUser?.name || "")}</td></tr><tr><td>Data</td><td>${esc(meta.data)}</td></tr>${meta.equipamento ? `<tr><td>Equipamento</td><td>${esc(meta.equipamento)}</td></tr>` : ""}${meta.local ? `<tr><td>Local</td><td>${esc(meta.local)}</td></tr>` : ""}<tr><td>Ensaio nº</td><td class="fs-line" style="display:inline-block;width:140px"></td></tr></table>
 ${resumoHTML}
+${vacuoHTML}
 ${ordem ? `<h2>Sugestão de ordem em campo</h2><ol style="font-size:13px;padding-left:18px">${ordem}</ol>` : ""}
 <h2>Checklist</h2>${gruposHTML || "<p>Nenhum requisito marcado.</p>"}
 ${planilhaHTML}
@@ -490,6 +512,12 @@ ${assinaturasHTML}
               <div><label className="text-xs text-slate-500">Local</label><input value={meta.local} onChange={e => setMeta({ ...meta, local: e.target.value })} placeholder="ex.: tanque Nautec" className="w-full mt-1 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" /></div>
             </div>
           </section>
+
+          {/* Pré-check de estanqueidade — acoplado ao Experimento de campo, não é
+              mais um experimento separado. Reprovar sinaliza, mas não bloqueia. */}
+          {exigeTesteVacuo(categoriaAtiva) && (
+            <TesteVacuo valor={testeVacuo} onChange={setTesteVacuo} readOnly={readOnly} />
+          )}
 
           {currentExp?.id && isOwnerCurrent && (<section className="bg-white rounded-xl border border-slate-200 p-4">
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Share2 size={13} className="text-blue-700" /> Compartilhar edição</h3>
@@ -715,6 +743,11 @@ ${assinaturasHTML}
                 <div className="flex flex-wrap items-center gap-1 mt-1">
                   <span className="inline-block text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">{categoriaMeta(x.modo).label}</span>
                   {x.resumoModo && <span className="inline-block text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 rounded-full px-2 py-0.5">{x.resumoModo}</span>}
+                  {x.statusEstanqueidade && x.statusEstanqueidade !== "pendente" && (
+                    <span className={`inline-block text-[10px] font-semibold rounded-full px-2 py-0.5 border ${x.statusEstanqueidade === "reprovado" ? "text-rose-700 bg-rose-50 border-rose-200" : x.statusEstanqueidade === "aprovado" ? "text-emerald-700 bg-emerald-50 border-emerald-200" : "text-amber-700 bg-amber-50 border-amber-200"}`}>
+                      vácuo: {ROTULO_STATUS[x.statusEstanqueidade]}
+                    </span>
+                  )}
                   {x.data && <span className="text-[10px] text-slate-400">{x.data}</span>}
                   {x.responsavel && <span className="text-[10px] text-slate-400">· {x.responsavel}</span>}
                 </div>
@@ -734,6 +767,17 @@ ${assinaturasHTML}
         <span className="inline-block text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 mb-3">{resumoModoFases(categoriaAtiva, meta)}</span>
         {meta.descricao && <><h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Descrição</h3><p className="text-sm mb-3">{meta.descricao}</p></>}
         <table className="w-full text-sm mb-3"><tbody><tr><td className="py-1 pr-3 text-slate-500 w-36">Responsável</td><td className="py-1 font-medium">{meta.responsavel || currentUser.name}</td></tr><tr><td className="py-1 pr-3 text-slate-500">Data</td><td className="py-1 font-medium">{meta.data}</td></tr>{meta.equipamento && <tr><td className="py-1 pr-3 text-slate-500">Equipamento</td><td className="py-1 font-medium">{meta.equipamento}</td></tr>}{meta.local && <tr><td className="py-1 pr-3 text-slate-500">Local</td><td className="py-1 font-medium">{meta.local}</td></tr>}</tbody></table>
+        {exigeTesteVacuo(categoriaAtiva) && (<>
+          <h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Teste de vácuo da cápsula</h3>
+          <p className="text-sm mb-3">
+            {quedaPressao(testeVacuo) === null
+              ? "Leituras não preenchidas."
+              : <>ΔP = <b>{quedaPressao(testeVacuo).toFixed(1)} {UNIDADE_PRESSAO}</b> em {testeVacuo.tempoDecorridoMinutos} min · tolerância {num(testeVacuo.limiteQueda)} {UNIDADE_PRESSAO} · </>}
+            <b className={statusEstanqueidade(testeVacuo) === "reprovado" ? "text-rose-700" : statusEstanqueidade(testeVacuo) === "aprovado" ? "text-emerald-700" : "text-slate-500"}>
+              {ROTULO_STATUS[statusEstanqueidade(testeVacuo)]}
+            </b>
+          </p>
+        </>)}
         <h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Requisitos marcados</h3>
         {blocosComSelecao.length === 0 ? <p className="text-sm text-slate-500">Nenhum requisito marcado.</p> : blocosComSelecao.map(b => (<div key={b.id} className="mb-3">
           <h4 className="font-semibold text-sm text-slate-700 mt-2">{b.titulo}{b.fonte && <span className="text-slate-400 font-normal text-xs"> · {b.fonte}</span>}</h4>

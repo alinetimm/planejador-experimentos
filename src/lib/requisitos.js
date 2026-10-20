@@ -55,7 +55,7 @@ export const CATEGORIAS = [
   },
   {
     id: "veiculo",
-    label: "Veículo Hydrone-J em campo",
+    label: "Experimento de campo",
     descricao: "Consumo e telemetria da missão híbrida, etapa por etapa.",
     icone: "Rocket",
   },

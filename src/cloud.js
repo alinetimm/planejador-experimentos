@@ -1,14 +1,14 @@
-import { db, auth, storage } from "./firebase";
+import { db, auth } from "./firebase";
 import {
-  GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
+  GoogleAuthProvider, signInWithPopup, reauthenticateWithPopup, signOut, onAuthStateChanged,
   sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink,
 } from "firebase/auth";
 import {
   collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
-  query, orderBy, onSnapshot, serverTimestamp, arrayUnion, arrayRemove,
+  query, orderBy, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, runTransaction,
 } from "firebase/firestore";
-import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { normalizarVacuo, migrarCategoria } from "./lib/vacuo";
+import { CATEGORIAS } from "./lib/requisitos";
 
 
 export function watchAuth(callback) {
@@ -129,7 +129,7 @@ export async function getExperiment(id) {
 // Cria (sem id) ou atualiza (com id). `bundle` é o objeto de estado do app.
 // title/modo/kind ficam no topo do doc para alimentar a lista sem baixar o bundle inteiro.
 // `testeVacuo` é gravado DESNORMALIZADO (números, não strings) além de dentro do
-// bundle, porque a Cloud Function e eventuais consultas por vazamento o leem daqui.
+// bundle, para consultas por vazamento sem abrir o bundle.
 export async function saveExperiment({ id, title, modo, kind, responsavel, data, resumoModo, bundle }) {
   const bundleJson = JSON.stringify(bundle ?? {});
   const vacuo = normalizarVacuo(bundle?.testeVacuo);
@@ -174,18 +174,122 @@ export function canEdit(exp, uid, admin) {
 
 // ──────────────────────── ANEXOS ────────────────────────
 // Fotos, vídeos e logs ligados a um experimento (e, opcionalmente, a um item de
-// checklist via itemId).
-//
-// Fluxo em dois saltos — ver functions/index.js:
-//   1. navegador → Firebase Storage (resumable, com progresso)
-//      caminho: attachments/{uid}/{expId}/{timestamp}-{arquivo}
-//   2. Cloud Function dispara no finalize, copia para o Google Drive em
-//      Hydrone/{data do experimento}/{tipo de experimento} e grava fileId,
-//      name, mimeType e webViewLink de volta no doc do anexo.
-//
-// O campo `drive.status` percorre: "pendente" → "enviando" → "ok" | "erro".
-// A UI mostra o link do Drive quando chega "ok"; até lá, o arquivo já está
-// seguro no Storage e visível pela URL de download.
+// checklist via itemId). O navegador envia o arquivo direto para o Google Drive,
+// em Hydrone/{data do experimento}/{tipo de experimento}, com o token Google de
+// quem está anexando. Firebase Storage e Cloud Functions ficaram de fora porque
+// exigem o plano Blaze. O doc do anexo só é criado depois que o Drive confirma
+// o arquivo, então não existe anexo "pendente".
+
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
+const DRIVE_API = "https://www.googleapis.com/drive/v3";
+const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
+// Aceita o id ou o link inteiro da pasta: colar "…/folders/<id>?usp=sharing" é
+// o engano mais comum, e qualquer sobra no id faz o Drive responder 404.
+const idDaPasta = (v) => String(v).match(/folders\/([\w-]+)/)?.[1] || String(v).match(/[\w-]+/)?.[0] || "";
+const PASTA_RAIZ = idDaPasta(import.meta.env.VITE_DRIVE_FOLDER_ID || "1d7cf-uRqeBp0wQSEmFe2HJtkRR1X3zuV");
+const TIPO_PASTA = "application/vnd.google-apps.folder";
+const SEM_PROGRESSO_MS = 60_000;
+
+// Só em memória: o token dá acesso ao Drive inteiro de quem anexa, então não vai
+// para localStorage. O Google o emite com validade de 1 h.
+let tokenDrive = null;   // { valor, expiraEm }
+
+/** Anexar exige login Google: é a conta Google que grava no Drive. */
+export const podeUsarDrive = () => !!auth.currentUser?.providerData.some(p => p.providerId === "google.com");
+export const driveConectado = () => !!tokenDrive && Date.now() < tokenDrive.expiraEm;
+
+/** Pede ao Google o acesso ao Drive. Abre popup, então só pode ser chamado a partir de um clique. */
+export async function conectarDrive() {
+  const u = auth.currentUser;
+  if (!podeUsarDrive()) throw new Error("para anexar, entre no app com a conta Google.");
+  const provider = new GoogleAuthProvider();
+  provider.addScope(DRIVE_SCOPE);
+  provider.setCustomParameters({ login_hint: u.email || "" });
+  const res = await reauthenticateWithPopup(u, provider);
+  const cred = GoogleAuthProvider.credentialFromResult(res);
+  if (!cred?.accessToken) throw new Error("o Google não devolveu o acesso ao Drive.");
+  // 55 min em vez de 60: não começar um upload com o token prestes a expirar.
+  tokenDrive = { valor: cred.accessToken, expiraEm: Date.now() + 55 * 60_000 };
+}
+
+/** Mensagem legível para falhas de conexão ou de envio ao Drive. */
+export function explicarErroDrive(e) {
+  if (e?.code === "auth/popup-blocked") return "o navegador bloqueou a janela do Google — libere popups para este site.";
+  if (e?.code === "auth/popup-closed-by-user" || e?.code === "auth/cancelled-popup-request") return "a janela do Google foi fechada antes de liberar o acesso.";
+  if (e?.code === "auth/user-mismatch") return "escolha na janela do Google a mesma conta com que você entrou no app.";
+  if (e?.code === "permission-denied") return "o Firestore recusou o registro — as regras de firestore.rules foram publicadas? Se sim, confira se você é dono ou editor deste experimento.";
+  if (e?.status === 401) return "o acesso ao Drive expirou — clique em Conectar ao Drive de novo.";
+  if (e?.status === 403 && /scope|insufficient/i.test(e.message)) return "o acesso ao Drive não foi liberado — marque a caixa do Google Drive na janela do Google.";
+  if (e?.status === 403 && /storageQuota|quota/i.test(e.message)) return "o Drive da sua conta está sem espaço.";
+  if (e?.status === 404) return "a pasta Hydrone não foi encontrada — ela precisa estar compartilhada com a sua conta como editor.";
+  return e?.message || String(e);
+}
+
+async function erroDaResposta(r) {
+  let msg = "";
+  try { msg = (await r.json()).error?.message || ""; } catch { /* corpo sem JSON */ }
+  const e = new Error(msg || `o Drive respondeu HTTP ${r.status}.`);
+  e.status = r.status;
+  if (r.status === 401) tokenDrive = null;
+  return e;
+}
+
+async function driveApi(caminho, { metodo = "GET", corpo, params = {} } = {}) {
+  if (!driveConectado()) { const e = new Error("sem acesso ao Drive."); e.status = 401; throw e; }
+  const url = new URL(DRIVE_API + caminho);
+  for (const [k, v] of Object.entries({ supportsAllDrives: "true", ...params })) url.searchParams.set(k, v);
+  const r = await fetch(url, {
+    method: metodo,
+    headers: { Authorization: `Bearer ${tokenDrive.valor}`, ...(corpo ? { "Content-Type": "application/json" } : {}) },
+    body: corpo ? JSON.stringify(corpo) : undefined,
+  });
+  if (!r.ok) throw await erroDaResposta(r);
+  return r.status === 204 ? null : r.json();
+}
+
+const aspasQuery = (s) => String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
+/**
+ * Id da subpasta `nome` dentro de `paiId`, criando-a se preciso. Duas pessoas
+ * anexando ao mesmo tempo criariam pastas homônimas (o Drive permite), por isso
+ * o id fica em drive_folders/ e quem perde a transação passa a usar a pasta de
+ * quem ganhou.
+ */
+async function pastaIdempotente(paiId, nome) {
+  const cacheRef = doc(db, "drive_folders", `${paiId}:${nome}`.replace(/\//g, "_"));
+  const cache = await getDoc(cacheRef);
+  if (cache.exists()) return cache.data().folderId;
+
+  const achou = await driveApi("/files", { params: {
+    q: `name='${aspasQuery(nome)}' and '${aspasQuery(paiId)}' in parents and mimeType='${TIPO_PASTA}' and trashed=false`,
+    fields: "files(id)", pageSize: "1", includeItemsFromAllDrives: "true",
+  } });
+  const existente = achou.files?.[0]?.id;
+  const minha = existente || (await driveApi("/files", { metodo: "POST", corpo: { name: nome, mimeType: TIPO_PASTA, parents: [paiId] }, params: { fields: "id" } })).id;
+
+  const vencedora = await runTransaction(db, async (tx) => {
+    const atual = await tx.get(cacheRef);
+    if (atual.exists()) return atual.data().folderId;
+    tx.set(cacheRef, { folderId: minha, nome, parentId: paiId, createdAt: serverTimestamp() });
+    return minha;
+  });
+  if (vencedora !== minha && !existente) {
+    driveApi(`/files/${minha}`, { metodo: "PATCH", corpo: { trashed: true } }).catch(() => {});
+  }
+  return vencedora;
+}
+
+const hojeLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const rotuloCategoria = (modo) => CATEGORIAS.find(c => c.id === migrarCategoria(modo))?.label || "Outros";
+
+/** Pasta Hydrone/{data}/{tipo} do experimento, criada se ainda não existir. */
+async function pastaDoExperimento(exp) {
+  const pastaData = await pastaIdempotente(PASTA_RAIZ, /^\d{4}-\d{2}-\d{2}$/.test(exp.data || "") ? exp.data : hojeLocal());
+  return pastaIdempotente(pastaData, rotuloCategoria(exp.modo));
+}
 
 function inferKind(file) {
   const n = (file.name || "").toLowerCase();
@@ -195,58 +299,97 @@ function inferKind(file) {
   return "outro";
 }
 
+async function abrirSessaoDeUpload(metadados, tipo, tamanho) {
+  const r = await fetch(`${DRIVE_UPLOAD}?uploadType=resumable&supportsAllDrives=true&fields=id,name,mimeType,webViewLink`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${tokenDrive.valor}`,
+      "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Type": tipo,
+      "X-Upload-Content-Length": String(tamanho),
+    },
+    body: JSON.stringify(metadados),
+  });
+  if (!r.ok) throw await erroDaResposta(r);
+  const sessao = r.headers.get("Location");
+  if (!sessao) throw new Error("o Drive não informou a URL da sessão de upload.");
+  return sessao;
+}
+
+// XHR em vez de fetch: fetch não informa o progresso do envio.
+function enviarComProgresso(sessao, file, tipo, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let vigia;
+    const rearmar = () => {
+      clearTimeout(vigia);
+      vigia = setTimeout(() => { xhr.abort(); reject(new Error(`o envio parou por ${SEM_PROGRESSO_MS / 1000} s — confira a conexão.`)); }, SEM_PROGRESSO_MS);
+    };
+    xhr.open("PUT", sessao);
+    xhr.setRequestHeader("Content-Type", tipo);
+    xhr.upload.onprogress = (ev) => { rearmar(); if (ev.lengthComputable) onProgress?.(Math.round((ev.loaded / ev.total) * 100)); };
+    xhr.onload = () => {
+      clearTimeout(vigia);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("resposta inesperada do Drive.")); }
+      } else {
+        let msg = "";
+        try { msg = JSON.parse(xhr.responseText).error?.message || ""; } catch { /* corpo sem JSON */ }
+        const e = new Error(msg || `o Drive respondeu HTTP ${xhr.status}.`);
+        e.status = xhr.status;
+        reject(e);
+      }
+    };
+    xhr.onerror = () => { clearTimeout(vigia); reject(new Error("a conexão caiu durante o envio.")); };
+    rearmar();
+    xhr.send(file);
+  });
+}
+
 /**
- * Upload resumable com progresso.
+ * Envia o arquivo ao Drive e registra o anexo no Firestore. Exige conectarDrive() antes.
  * @param {string} expId
  * @param {File} file
  * @param {{itemId?: string|null, onProgress?: (pct:number)=>void}} opts
  */
 export async function uploadAttachment(expId, file, { itemId = null, onProgress } = {}) {
   const u = auth.currentUser;
-  if (!u) throw new Error("Não autenticado.");
+  if (!u) throw new Error("não autenticado.");
   const kind = inferKind(file);
-  const safe = (file.name || "arquivo").replace(/[^\w.\-]+/g, "_");
-  const path = `attachments/${u.uid}/${expId}/${Date.now()}-${safe}`;
-  const sref = ref(storage, path);
+  const tipo = file.type || "application/octet-stream";
 
-  // O doc nasce ANTES do upload: a Cloud Function dispara no finalize e procura
-  // o doc por storagePath. Criado depois, ele quase sempre perderia a corrida e
-  // o arquivo nunca seria copiado para o Drive.
-  const refd = await addDoc(collection(db, "experiments", expId, "attachments"), {
-    type: file.type?.startsWith("image/") ? "photo" : "file",
-    kind, itemId,
-    fileName: file.name || safe,
-    contentType: file.type || "application/octet-stream",
-    size: file.size || 0,
-    storagePath: path,
-    url: null,
-    uploadedBy: u.uid,
-    drive: { status: "pendente", fileId: null, name: null, mimeType: null, webViewLink: null },
-    createdAt: serverTimestamp(),
-  });
+  const exp = (await getDoc(doc(db, "experiments", expId))).data() || {};
+  const pastaTipo = await pastaDoExperimento(exp);
 
-  const task = uploadBytesResumable(sref, file, {
-    contentType: file.type || "application/octet-stream",
-    // Lido pela Cloud Function: evita que ela precise adivinhar a que
-    // experimento e a que item do checklist o arquivo pertence.
-    customMetadata: { expId, uid: u.uid, itemId: itemId || "", kind },
-  });
+  const sessao = await abrirSessaoDeUpload({
+    name: file.name || "arquivo",
+    parents: [pastaTipo],
+    appProperties: { expId, itemId: itemId || "", uid: u.uid },
+  }, tipo, file.size);
+  const criado = await enviarComProgresso(sessao, file, tipo, onProgress);
+  const drive = { status: "ok", fileId: criado.id, name: criado.name, mimeType: criado.mimeType, webViewLink: criado.webViewLink };
 
   try {
-    await new Promise((resolve, reject) => {
-      task.on("state_changed",
-        (snap) => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
-        reject,
-        resolve);
+    const refd = await addDoc(collection(db, "experiments", expId, "attachments"), {
+      type: file.type?.startsWith("image/") ? "photo" : "file",
+      kind, itemId,
+      fileName: file.name || "arquivo",
+      contentType: tipo,
+      size: file.size || 0,
+      uploadedBy: u.uid,
+      drive,
+      createdAt: serverTimestamp(),
     });
+    // Cópia no doc do experimento: lista de anexos legível sem abrir a subcoleção.
+    await updateDoc(doc(db, "experiments", expId), {
+      driveAttachments: arrayUnion({ fileId: drive.fileId, name: drive.name, mimeType: drive.mimeType, webViewLink: drive.webViewLink }),
+    }).catch(() => { /* a subcoleção já tem o registro */ });
+    return { id: refd.id, kind, fileName: file.name, drive };
   } catch (e) {
-    await deleteDoc(refd).catch(() => {});
+    // Sem o registro no app o arquivo ficaria órfão no Drive.
+    await driveApi(`/files/${drive.fileId}`, { metodo: "PATCH", corpo: { trashed: true } }).catch(() => {});
     throw e;
   }
-
-  const url = await getDownloadURL(sref);
-  await updateDoc(refd, { url });
-  return { id: refd.id, kind, fileName: file.name, url, storagePath: path };
 }
 
 export async function listAttachments(expId) {
@@ -261,9 +404,75 @@ export function watchAttachments(expId, callback) {
     (qs) => callback(qs.docs.map((d) => ({ id: d.id, ...d.data() }))));
 }
 
+/**
+ * Remove o anexo do app e manda o arquivo para a lixeira do Drive (recuperável).
+ * Devolve um aviso quando o arquivo não pôde ir para a lixeira — por exemplo,
+ * sem conexão ao Drive ou por ser de outra pessoa (no Drive pessoal, só o dono
+ * do arquivo pode mandá-lo para a lixeira).
+ */
 export async function deleteAttachment(expId, att) {
-  if (att.storagePath) {
-    try { await deleteObject(ref(storage, att.storagePath)); } catch { /* arquivo já removido */ }
+  let aviso = null;
+  const d = att.drive;
+  if (d?.fileId) {
+    try { await driveApi(`/files/${d.fileId}`, { metodo: "PATCH", corpo: { trashed: true } }); }
+    catch (e) { aviso = `o arquivo continua no Drive (${explicarErroDrive(e)})`; }
+    await updateDoc(doc(db, "experiments", expId), {
+      driveAttachments: arrayRemove({ fileId: d.fileId, name: d.name, mimeType: d.mimeType, webViewLink: d.webViewLink }),
+    }).catch(() => {});
   }
   await deleteDoc(doc(db, "experiments", expId, "attachments", att.id));
+  return aviso;
+}
+
+// ──────────────────────── FOLHA DE CAMPO EM PDF ────────────────────────
+
+/**
+ * Grava a folha de campo em PDF na pasta do experimento no Drive. Na primeira vez
+ * cria o arquivo; nas seguintes substitui o conteúdo do MESMO arquivo, então o
+ * link não muda e as versões anteriores ficam no histórico de versões do Drive.
+ * Exige conectarDrive() antes.
+ * @returns {Promise<{fileId, webViewLink, pastaId, nome}>}
+ */
+export async function salvarFolhaNoDrive(expId, pdf, nomeArquivo) {
+  const exp = (await getDoc(doc(db, "experiments", expId))).data() || {};
+  const pastaTipo = await pastaDoExperimento(exp);
+  const anterior = exp.folhaPdf;
+
+  let arquivo = null;
+  if (anterior?.fileId) {
+    try {
+      const params = new URLSearchParams({ uploadType: "media", supportsAllDrives: "true", fields: "id,webViewLink,trashed" });
+      // A data ou o tipo mudaram desde o último salvamento: o PDF muda de pasta junto.
+      if (anterior.pastaId && anterior.pastaId !== pastaTipo) {
+        params.set("addParents", pastaTipo);
+        params.set("removeParents", anterior.pastaId);
+      }
+      const r = await fetch(`${DRIVE_UPLOAD}/${anterior.fileId}?${params}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${tokenDrive.valor}`, "Content-Type": "application/pdf" },
+        body: pdf,
+      });
+      if (!r.ok) throw await erroDaResposta(r);
+      arquivo = await r.json();
+      // Alguém mandou o PDF para a lixeira no Drive: recomeça com um arquivo novo em vez de ressuscitá-lo.
+      if (arquivo.trashed) arquivo = null;
+      else if (anterior.nome !== nomeArquivo) await driveApi(`/files/${arquivo.id}`, { metodo: "PATCH", corpo: { name: nomeArquivo } });
+    } catch (e) {
+      // 404: apagado de vez no Drive. Qualquer outro erro é real e sobe.
+      if (e.status !== 404) throw e;
+      arquivo = null;
+    }
+  }
+  if (!arquivo) {
+    const sessao = await abrirSessaoDeUpload({
+      name: nomeArquivo,
+      parents: [pastaTipo],
+      appProperties: { expId, folhaDeCampo: "1" },
+    }, "application/pdf", pdf.size);
+    arquivo = await enviarComProgresso(sessao, pdf, "application/pdf");
+  }
+
+  const folhaPdf = { fileId: arquivo.id, webViewLink: arquivo.webViewLink, pastaId: pastaTipo, nome: nomeArquivo };
+  await updateDoc(doc(db, "experiments", expId), { folhaPdf: { ...folhaPdf, atualizadoEm: serverTimestamp() } });
+  return folhaPdf;
 }

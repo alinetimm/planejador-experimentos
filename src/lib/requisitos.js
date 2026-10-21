@@ -15,6 +15,15 @@
 //   "valor"       → número + unidade (`unidade`)
 //   "texto"       → caixa de texto multilinha
 //   "opcoes"      → lista de opções personalizadas (`opcoes[]`)
+//   "hora"        → HH:MM:SS, com botão que marca a hora atual do aparelho
+//   "data"        → AAAA-MM-DD, com calendário; linha nova da planilha já nasce com a data de hoje
+//
+// repetir: true → ao adicionar uma linha na planilha, o valor é copiado da linha anterior
+// (local, condição ambiental: o que raramente muda entre um ensaio e o próximo).
+// repetir: "execucao" → copiado só enquanto a sequência não recomeça (o ensaio_id das
+// 8 etapas de uma mesma execução); quando a etapa volta a 1, fica em branco.
+// sequencia: true → a linha nova recebe a opção seguinte à da linha anterior; depois da
+// última, volta à primeira (etapa 8 → 1).
 // Item sem `resposta` explícito herda um padrão de respostaDe() a partir do `captura` legado.
 
 export const RESPOSTAS = {
@@ -24,6 +33,8 @@ export const RESPOSTAS = {
   valor: { label: "Valor numérico", padrao: [] },
   texto: { label: "Texto (caixa ampla)", padrao: [] },
   opcoes: { label: "Opções personalizadas", padrao: [] },
+  hora: { label: "Hora (botão marca a hora atual)", padrao: [] },
+  data: { label: "Data (calendário)", padrao: [] },
 };
 
 export function respostaDe(item) {
@@ -43,7 +54,7 @@ export function opcoesDe(item) {
 export const CATEGORIAS = [
   {
     id: "manobra",
-    label: "Manobra de pouso · HUAUV/USV",
+    label: "Manobra de pouso",
     descricao: "Impacto do pouso, resposta do casco e sincronismo entre controladoras.",
     icone: "Waves",
   },
@@ -83,6 +94,8 @@ const uid = () => `r${Date.now().toString(36)}${(_iid++).toString(36)}`;
 const it = (id, titulo, simples, gera, porque, captura, escopo, unidade = "", modos, resposta, opcoes) =>
   ({ id, titulo, simples, gera, porque, captura, escopo, unidade,
      ...(modos ? { modos } : {}), ...(resposta ? { resposta } : {}), ...(opcoes ? { opcoes } : {}) });
+const repete = (item, modo = true) => ({ ...item, repetir: modo });
+const emSequencia = (item) => ({ ...item, sequencia: true });
 
 export const BLOCOS_PADRAO = [
   {
@@ -229,7 +242,7 @@ export const BLOCOS_PADRAO = [
         "valor", "ensaio", "", undefined, "texto"),
       it("F2", "data", "A data em que o ensaio foi realizado.",
         "Coluna de data (AAAA-MM-DD) na planilha de campo.", "Permite cruzar o ensaio com condições externas (clima, maré) e ordenar a sequência de execução.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "data"),
       it("F3", "hora_gps", "A hora de início do ensaio, tirada do relógio do GPS (não do celular ou de cabeça).",
         "Coluna de hora absoluta de referência para alinhar com A2/A3.", "É a hora que efetivamente sincroniza com os timestamps dos logs de bordo.",
         "valor", "ensaio"),
@@ -242,9 +255,9 @@ export const BLOCOS_PADRAO = [
       it("F6", "responsavel", "Quem executou ou registrou este ensaio.",
         "Coluna de autoria/registro por ensaio.", "Permite rastrear e esclarecer dúvidas sobre como um ensaio específico foi conduzido.",
         "valor", "ensaio", "", undefined, "texto"),
-      it("F7", "local", "Onde o ensaio foi feito (tanque, praia, coordenadas).",
+      repete(it("F7", "local", "Onde o ensaio foi feito (tanque, praia, coordenadas).",
         "Coluna de local/coordenadas por ensaio.", "O local muda variáveis ambientais relevantes (correnteza, salinidade, espaço disponível).",
-        "valor", "ensaio"),
+        "valor", "ensaio")),
       it("F8", "observacoes", "Qualquer coisa fora do comum que aconteceu durante o ensaio e vale a pena lembrar depois.",
         "Campo de texto livre por ensaio.", "Anomalias não previstas nos campos estruturados só ficam registradas se houver um lugar livre para anotá-las.",
         "valor", "ensaio", "", undefined, "texto"),
@@ -347,7 +360,7 @@ export const BLOCOS_PADRAO = [
     resumo: "Registro do ambiente no momento do ensaio.",
     itens: [
       it("AMB1", "Data e hora", "Anote o dia e a hora em que o ensaio foi feito.", "Carimbo de data/hora do registro ambiental.", "Permite cruzar as condições com o restante do log do ensaio.", "valor", "ensaio"),
-      it("AMB2", "Local (coordenadas GPS)", "Anote onde o ensaio foi feito, de preferência com coordenadas de GPS.", "Coordenadas do local do ensaio.", "O local influencia correnteza, salinidade e exposição ao vento.", "valor", "ensaio"),
+      repete(it("AMB2", "Local (coordenadas GPS)", "Anote onde o ensaio foi feito, de preferência com coordenadas de GPS.", "Coordenadas do local do ensaio.", "O local influencia correnteza, salinidade e exposição ao vento.", "valor", "ensaio")),
       it("AMB3", "Velocidade do vento", "Meça a velocidade do vento no momento do ensaio; vento forte muda o comportamento do veículo.", "Medição de velocidade do vento.", "É uma das principais fontes de perturbação externa em ensaios ao ar livre.", "valor", "ensaio", "m/s"),
       it("AMB4", "Direção do vento", "Anote de onde o vento está vindo.", "Registro da direção do vento.", "A direção relativa ao veículo muda o tipo de perturbação (frontal, lateral).", "valor", "ensaio", "°"),
       it("AMB5", "Temperatura do ar", "Meça a temperatura do ar.", "Registro de temperatura ambiente.", "Afeta densidade do ar (empuxo aéreo) e desempenho da bateria.", "valor", "ensaio", "°C"),
@@ -644,7 +657,7 @@ export const BLOCOS_PADRAO = [
         "valor", "ensaio", "", undefined, "texto"),
       it("BN-M2", "data", "A data em que o ensaio de bancada foi realizado.",
         "Coluna de data (AAAA-MM-DD) na planilha de campo.", "Permite ordenar e cruzar os ensaios com o restante do diário de bancada.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "data"),
       it("BN-M3", "configuração", "Qual propulsor e qual rotação (ou modo de varredura) foram usados neste ensaio.",
         "Coluna categórica com a combinação propulsor + rotação testada.", "É o elo entre a linha da planilha e o tratamento experimental que gerou aquele CSV.",
         "valor", "ensaio"),
@@ -662,10 +675,10 @@ export const BLOCOS_PADRAO = [
         "valor", "ensaio", "", undefined, "texto"),
       it("BN-M8", "hora início", "A hora em que o ensaio começou.",
         "Coluna de hora de início por ensaio.", "Ajuda a cruzar o ensaio com condições ambientais e com o timestamp interno do CSV.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "hora"),
       it("BN-M9", "hora fim", "A hora em que o ensaio terminou.",
         "Coluna de hora de término por ensaio.", "Junto com a hora de início, dá a duração real do ensaio, útil para conferir se a varredura completou.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "hora"),
       it("BN-M10", "observações", "Qualquer coisa fora do comum que aconteceu durante o ensaio de bancada.",
         "Campo de texto livre por ensaio.", "Anomalias não previstas nos campos estruturados só ficam registradas se houver um lugar livre para anotá-las.",
         "valor", "ensaio", "", undefined, "texto"),
@@ -867,27 +880,27 @@ export const BLOCOS_PADRAO = [
     fonte: "SubHydrone/NAUTEC · Veículo Hydrone-J",
     resumo: "Uma linha por etapa de cada execução (8 etapas por missão completa). Liga cada arquivo bruto de telemetria/energia à etapa e à execução certas.",
     itens: [
-      it("VJ-M1", "ensaio_id (execução)", "Dê um código único para cada execução completa da missão (não para cada etapa).",
+      repete(it("VJ-M1", "ensaio_id (execução)", "Dê um código único para cada execução completa da missão (não para cada etapa).",
         "Chave única que identifica a execução na planilha de campo.", "Como cada execução tem 8 linhas (uma por etapa), esse código é o que agrupa as 8 etapas de uma mesma missão.",
-        "valor", "ensaio", "", undefined, "texto"),
-      it("VJ-M2", "etapa (1–8)", "O número da etapa dentro da execução (1 a 8), sempre na ordem fixa da missão.",
+        "valor", "ensaio", "", undefined, "texto"), "execucao"),
+      emSequencia(it("VJ-M2", "etapa (1–8)", "O número da etapa dentro da execução (1 a 8), sempre na ordem fixa da missão.",
         "Coluna numérica indicando qual das 8 etapas fixas está sendo registrada.", "Permite separar e comparar o desempenho de cada etapa entre execuções diferentes.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "opcoes", ["1", "2", "3", "4", "5", "6", "7", "8"])),
       it("VJ-M3", "data", "A data em que a execução foi realizada.",
         "Coluna de data (AAAA-MM-DD) na planilha de campo.", "Permite cruzar a execução com condições externas e ordenar as execuções no tempo.",
-        "valor", "ensaio"),
-      it("VJ-M4", "condição ambiental", "Um resumo curto da condição ambiental durante essa etapa (vento, estado da água).",
+        "valor", "ensaio", "", undefined, "data"),
+      repete(it("VJ-M4", "condição ambiental", "Um resumo curto da condição ambiental durante essa etapa (vento, estado da água).",
         "Coluna de texto com a condição ambiental observada na etapa.", "Serve de referência rápida sem precisar abrir o registro detalhado do bloco de variáveis estranhas.",
-        "valor", "ensaio"),
-      it("VJ-M5", "local", "Onde a execução foi feita (área de decolagem/entrada na água).",
+        "valor", "ensaio")),
+      repete(it("VJ-M5", "local", "Onde a execução foi feita (área de decolagem/entrada na água).",
         "Coluna de local/coordenadas por execução.", "O local muda variáveis relevantes como correnteza e espaço disponível para a etapa submersa.",
-        "valor", "ensaio"),
+        "valor", "ensaio")),
       it("VJ-M6", "hora início da etapa", "A hora em que essa etapa específica começou.",
         "Coluna de hora de início por etapa.", "Permite calcular a duração de cada etapa e alinhar com o log de telemetria.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "hora"),
       it("VJ-M7", "hora fim da etapa", "A hora em que essa etapa específica terminou.",
         "Coluna de hora de término por etapa.", "Junto com a hora de início, dá a duração real de cada etapa dentro da execução.",
-        "valor", "ensaio"),
+        "valor", "ensaio", "", undefined, "hora"),
       it("VJ-M8", "arquivo de dados", "O nome do arquivo de telemetria/energia que corresponde a essa etapa.",
         "Coluna de texto com o nome do arquivo bruto de dados da etapa.", "É o vínculo direto entre a linha da planilha e o dado bruto real gerado durante aquela etapa.",
         "valor", "ensaio", "", undefined, "texto"),
@@ -951,7 +964,19 @@ export function loadBlocos() {
     if (Array.isArray(parsed) && parsed.length) saved = parsed;
   } catch { /* ignora e usa o padrão */ }
   if (!saved) return BLOCOS_PADRAO;
-  const migrado = saved.map(comCategoria);
+  // Itens salvos sem `resposta` explícita nunca foram editados: herdam o tipo do
+  // padrão atual. Sem isso, um tipo novo no padrão (ex.: "hora") só apareceria
+  // depois de "restaurar biblioteca", porque o localStorage guarda o bloco inteiro.
+  const padraoPorId = new Map(BLOCOS_PADRAO.flatMap(b => b.itens.map(i => [i.id, i])));
+  // `repetir` e `sequencia` não são editáveis pela UI, então vêm sempre do padrão.
+  const comRespostaDoPadrao = (item) => {
+    const p = padraoPorId.get(item.id);
+    if (!p) return item;
+    const herdado = item.resposta || !p.resposta ? item : { ...item, resposta: p.resposta, ...(p.opcoes && !item.opcoes ? { opcoes: p.opcoes } : {}) };
+    const flags = Object.fromEntries(["repetir", "sequencia"].filter(k => p[k] !== undefined && herdado[k] === undefined).map(k => [k, p[k]]));
+    return Object.keys(flags).length ? { ...herdado, ...flags } : herdado;
+  };
+  const migrado = saved.map(comCategoria).map(b => ({ ...b, itens: (b.itens || []).map(comRespostaDoPadrao) }));
   const idsExistentes = new Set(migrado.map(b => b.id));
   const faltando = BLOCOS_PADRAO.filter(b => !idsExistentes.has(b.id));
   return faltando.length ? [...migrado, ...faltando] : migrado;
@@ -963,6 +988,28 @@ export function resetBlocos() {
   try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* localStorage indisponível */ }
   return BLOCOS_PADRAO;
 }
+/** Linha nova da planilha de campo, preenchida a partir da anterior (ver `repetir`, `sequencia`). */
+export function novaLinhaPlanilha(itens, anterior, hoje) {
+  let reiniciou = !anterior;
+  const seq = {};
+  for (const i of itens) {
+    if (!i.sequencia) continue;
+    const opts = opcoesDe(i);
+    const pos = anterior ? opts.indexOf(String(anterior[i.id] ?? "")) : -1;
+    // Anterior vazia ou fora da lista: a posição na sequência é desconhecida, e um
+    // chute errado é pior que o campo em branco.
+    if (pos === -1) seq[i.id] = anterior ? "" : (opts[0] ?? "");
+    else if (pos === opts.length - 1) { seq[i.id] = opts[0]; reiniciou = true; }
+    else seq[i.id] = opts[pos + 1];
+  }
+  return Object.fromEntries(itens.map(i => {
+    if (i.id in seq) return [i.id, seq[i.id]];
+    if (respostaDe(i) === "data") return [i.id, hoje];
+    if (i.repetir === true || (i.repetir === "execucao" && !reiniciou)) return [i.id, anterior?.[i.id] ?? ""];
+    return [i.id, ""];
+  }));
+}
+
 export function novoItemVazio() {
   return it(uid(), "", "", "", "", "valor", "ensaio");
 }

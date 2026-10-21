@@ -42,20 +42,25 @@ service cloud.firestore {
                         && request.resource.data.editors == resource.data.editors);
       allow delete: if admin() || resource.data.ownerId == eu();
 
-      // Anexos: metadados criados pelo cliente, campo `drive` preenchido pela
-      // Cloud Function (que roda com privilégio de admin e ignora estas regras).
+      // Anexos: o navegador envia o arquivo ao Drive e só então cria o doc,
+      // já com o fileId devolvido pelo Drive.
       match /attachments/{anexoId} {
         allow read: if autenticado();
         allow create: if podeEditarExp(expId)
                       && request.resource.data.uploadedBy == eu()
-                      && request.resource.data.drive.status == "pendente";
+                      && request.resource.data.drive.status == "ok"
+                      && request.resource.data.drive.fileId is string;
         allow update, delete: if podeEditarExp(expId);
       }
     }
 
-    // Cache de ids de pasta do Drive — escrito exclusivamente pela Cloud Function.
+    // Cache de ids de pasta do Drive ({data}/{tipo}), para dois uploads simultâneos
+    // não criarem pastas homônimas. Só nasce uma vez: quem perde a transação
+    // reaproveita o id de quem ganhou, então nunca há update.
     match /drive_folders/{chave} {
-      allow read, write: if false;
+      allow read: if autenticado();
+      allow create: if autenticado() && request.resource.data.folderId is string;
+      allow update, delete: if false;
     }
   }
 }

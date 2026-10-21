@@ -1,18 +1,21 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Waves, Gauge, Rocket, ClipboardList, ClipboardCheck, Download, Upload, Plus, Trash2, BookOpen, ChevronDown,
   User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileJson, FileText,
-  DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Table2, Copy,
+  DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Table2, Copy, ExternalLink,
 } from "lucide-react";
 import * as cloud from "./cloud";
 import { download, toCSV } from "./lib/stats";
-import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORDEM_SUGERIDA, RESPOSTAS, respostaDe, opcoesDe, CATEGORIAS, CATEGORIA_PADRAO, FASES_MISSAO } from "./lib/requisitos";
+import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORDEM_SUGERIDA, RESPOSTAS, respostaDe, opcoesDe, CATEGORIAS, CATEGORIA_PADRAO, FASES_MISSAO, novaLinhaPlanilha } from "./lib/requisitos";
 import AnalisarDados from "./AnalisarDados";
 import TesteVacuo from "./TesteVacuo";
 import Anexos from "./Anexos";
+import PlanilhaCampo, { CampoHora } from "./PlanilhaCampo";
+import { gerarPdfFolha } from "./lib/folhaPdf";
 import { VACUO_DEF, exigeTesteVacuo, migrarCategoria, statusEstanqueidade, quedaPressao, ROTULO_STATUS, UNIDADE_PRESSAO, num } from "./lib/vacuo";
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Data local: toISOString é UTC e, depois das 21h no Brasil, já devolve o dia seguinte.
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const META_DEF = { nome: "", descricao: "", responsavel: "", data: today(), equipamento: "", local: "", notas: "", modoEnsaio: "os_dois", fases: [] };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const ICONES_CATEGORIA = { Waves, Gauge, Rocket };
@@ -86,7 +89,6 @@ export default function App() {
   const [explicacaoAbertos, setExplicacaoAbertos] = useState(() => new Set());
   const [gruposAlternados, setGruposAlternados] = useState(() => new Set());
   const [ordemAberta, setOrdemAberta] = useState(false);
-  const [celulasAbertas, setCelulasAbertas] = useState(() => new Set());
   const [libEditMode, setLibEditMode] = useState(false);
   const [itemDraft, setItemDraft] = useState(null);
   const [blocoDraft, setBlocoDraft] = useState(null);
@@ -103,7 +105,8 @@ export default function App() {
     setSessaoValores(b?.sessaoValores || {});
     setTesteVacuo({ ...VACUO_DEF, ...(b?.testeVacuo || {}) });
   };
-  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2200); };
+  const toastTimer = useRef(null);
+  const flash = (m, ms = 2200) => { clearTimeout(toastTimer.current); setToast(m); toastTimer.current = setTimeout(() => setToast(""), ms); };
 
   useEffect(() => { const h = (e) => { e.preventDefault(); setDeferred(e); }; window.addEventListener("beforeinstallprompt", h); return () => window.removeEventListener("beforeinstallprompt", h); }, []);
   const installApp = async () => { if (!deferred) return; deferred.prompt(); await deferred.userChoice; setDeferred(null); };
@@ -141,19 +144,44 @@ export default function App() {
     try {
       const t = (title || currentExp?.title || meta.nome || "Sem título").toString().trim().slice(0, 120) || "Sem título";
       const id = await cloud.saveExperiment({ id: currentExp?.id, title: t, modo: categoriaAtiva, kind: "protocolo", responsavel: meta.responsavel || "", data: meta.data || "", resumoModo: resumoModoFases(categoriaAtiva, meta), bundle: bundle() });
-      setCurrentExp(prev => ({ id, title: t, ownerId: prev?.ownerId || currentUser.uid, ownerName: prev?.ownerName || currentUser.name, editors: prev?.editors || [] }));
+      setCurrentExp(prev => ({ id, title: t, ownerId: prev?.ownerId || currentUser.uid, ownerName: prev?.ownerName || currentUser.name, editors: prev?.editors || [], folhaPdf: prev?.id === id ? prev.folhaPdf : undefined }));
       flash("Salvo na nuvem");
-    } catch { flash("Não foi possível salvar (sem permissão?)"); }
-    setBusy(false); setShowSaveDlg(false); setSaveTitle("");
+      return { id, title: t };
+    } catch { flash("Não foi possível salvar (sem permissão?)"); return null; }
+    finally { setBusy(false); setShowSaveDlg(false); setSaveTitle(""); }
   };
-  const onSaveClick = () => { if (currentExp?.id && canEditCurrent) persist(); else setShowSaveDlg(true); };
+  // Salvar também grava a folha de campo em PDF no Drive, substituindo a versão
+  // anterior. Se o acesso ao Drive expirou, o popup do Google precisa nascer do
+  // próprio clique — por isso a conexão vem antes de qualquer outra espera.
+  const salvar = async (title) => {
+    let drive = cloud.driveConectado();
+    let motivo = "";
+    if (!drive && cloud.podeUsarDrive()) {
+      try { await cloud.conectarDrive(); drive = true; }
+      catch (e) { motivo = cloud.explicarErroDrive(e); }
+    }
+    const salvo = await persist(title);
+    if (!salvo) return;
+    if (!drive) { if (motivo) flash(`Salvo, mas o PDF não foi para o Drive: ${motivo}`, 8000); return; }
+    setBusy(true);
+    flash("Salvo — gerando a folha de campo em PDF…", 120000);
+    try {
+      const pdf = await gerarPdfFolha(buildReportHTML());
+      const folhaPdf = await cloud.salvarFolhaNoDrive(salvo.id, pdf, `Folha de campo — ${salvo.title}.pdf`);
+      setCurrentExp(prev => (prev?.id === salvo.id ? { ...prev, folhaPdf } : prev));
+      flash("Salvo — folha de campo em PDF atualizada no Drive", 3500);
+    } catch (e) {
+      flash(`Salvo, mas o PDF não foi para o Drive: ${cloud.explicarErroDrive(e)}`, 8000);
+    } finally { setBusy(false); }
+  };
+  const onSaveClick = () => { if (currentExp?.id && canEditCurrent) salvar(); else setShowSaveDlg(true); };
 
   const openExperiment = async (summary) => {
     setBusy(true);
     try {
       const full = await cloud.getExperiment(summary.id);
       if (full?.bundle) applyBundle(full.bundle);
-      setCurrentExp({ id: full.id, title: full.title, ownerId: full.ownerId, ownerName: full.ownerName, editors: full.editors || [] });
+      setCurrentExp({ id: full.id, title: full.title, ownerId: full.ownerId, ownerName: full.ownerName, editors: full.editors || [], folhaPdf: full.folhaPdf });
       setStep(1); flash(`"${full.title}" aberto${cloud.canEdit({ ownerId: full.ownerId, editors: full.editors }, currentUser?.uid, isAdmin) ? "" : " (somente leitura)"}`);
     } catch { flash("Erro ao abrir o experimento"); }
     setBusy(false); setShowSaves(false);
@@ -194,7 +222,6 @@ export default function App() {
   const toggleDetalhe = (id) => setDetalheAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleExplicacao = (id) => setExplicacaoAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleGrupo = (id) => setGruposAlternados(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const toggleCelula = (key) => setCelulasAbertas(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const grupoAberto = (id, idx, total) => { const padraoAberto = idx === 0 || total <= 4; return gruposAlternados.has(id) ? !padraoAberto : padraoAberto; };
 
   const openNewItem = (blocoId) => setItemDraft({ blocoId, itemId: null, titulo: "", simples: "", gera: "", porque: "", captura: "valor", unidade: "", escopo: "ensaio", modos: [], resposta: "verificacao", opcoes: [] });
@@ -242,7 +269,7 @@ export default function App() {
   const ensaioItems = selectedFlat.filter(i => i.escopo === "ensaio");
   const blocosComSelecao = blocos.filter(b => selectedFlat.some(i => i.blocoId === b.id));
 
-  const itemVerificado = (item) => { const v = sessaoValores[item.id] || {}; const r = respostaDe(item); return (r === "valor" || r === "texto") ? !!(v.valor && v.valor.trim()) : !!v.resultado; };
+  const itemVerificado = (item) => { const v = sessaoValores[item.id] || {}; const r = respostaDe(item); return (r === "valor" || r === "texto" || r === "hora" || r === "data") ? !!(v.valor && v.valor.trim()) : !!v.resultado; };
   const corPilula = (opcao, ativo) => {
     if (!ativo) return "bg-slate-100 text-slate-600 hover:bg-slate-200";
     if (["Falhou", "Não", "Refazer"].includes(opcao)) return "bg-rose-600 text-white";
@@ -259,7 +286,7 @@ export default function App() {
   const sessaoFalhas = sessaoItems.filter(i => ["Falhou", "Não", "Refazer"].includes((sessaoValores[i.id] || {}).resultado)).length;
 
   const setSessaoValor = (itemId, patch) => setSessaoValores(v => ({ ...v, [itemId]: { ...(v[itemId] || {}), ...patch } }));
-  const addEnsaioRow = () => setEnsaioRows(rs => [...rs, Object.fromEntries(ensaioItems.map(i => [i.id, ""]))]);
+  const addEnsaioRow = () => setEnsaioRows(rs => [...rs, novaLinhaPlanilha(ensaioItems, rs[rs.length - 1], today())]);
   const setEnsaioCell = (rowIdx, itemId, val) => setEnsaioRows(rs => rs.map((r, i) => i === rowIdx ? { ...r, [itemId]: val } : r));
   const delEnsaioRow = (rowIdx) => setEnsaioRows(rs => rs.filter((_, i) => i !== rowIdx));
   const exportPlanilha = () => {
@@ -284,7 +311,7 @@ export default function App() {
     const linhaChecklist = (item) => {
       const v = sessaoValores[item.id] || {};
       const r = respostaDe(item);
-      if (r === "valor") {
+      if (r === "valor" || r === "hora" || r === "data") {
         return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-line">${v.valor ? esc(v.valor) : ""}</span>${item.unidade ? `<span class="fs-unidade">${esc(item.unidade)}</span>` : ""}</div><div class="fs-obs fs-obs-curta">Obs.: <span class="fs-line-obs fs-line-obs-curta"></span></div>`;
       }
       const opcoes = opcoesDe(item);
@@ -439,7 +466,7 @@ ${assinaturasHTML}
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800" style={{ fontFamily: "ui-sans-serif, system-ui, sans-serif" }}>
       <header className="bg-gradient-to-r from-slate-900 via-blue-900 to-blue-800 text-white">
-        <div className="max-w-4xl mx-auto px-4 py-4">
+        <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
             <div className="flex items-center gap-3"><img src="/hydrone-mark.png" alt="Hydrone" className="h-9 w-9 shrink-0" /><div><h1 className="text-lg font-bold leading-tight">Planejador de Experimentos</h1><p className="text-xs text-blue-100">Hydrone · montador de protocolo</p></div></div>
             {headerActions}
@@ -452,7 +479,7 @@ ${assinaturasHTML}
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-6">
+      <main className="max-w-6xl mx-auto px-4 py-6">
         {readOnly && (<div className="mb-4 flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-sm"><Lock size={15} className="shrink-0" /> Somente leitura — você não é dono nem editor deste experimento. As alterações não serão salvas.</div>)}
 
         {/* TELA 1 — SOBRE O EXPERIMENTO */}
@@ -520,7 +547,7 @@ ${assinaturasHTML}
             <TesteVacuo valor={testeVacuo} onChange={setTesteVacuo} readOnly={readOnly} />
           )}
 
-          <Anexos expId={currentExp?.id} readOnly={readOnly} onFlash={flash} />
+          <Anexos expId={currentExp?.id} readOnly={readOnly} />
 
           {currentExp?.id && isOwnerCurrent && (<section className="bg-white rounded-xl border border-slate-200 p-4">
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Share2 size={13} className="text-blue-700" /> Compartilhar edição</h3>
@@ -652,6 +679,8 @@ ${assinaturasHTML}
                           onToggleExplicacao={() => toggleExplicacao(item.id)} onToggleDetalhe={() => toggleDetalhe(item.id)}
                           className={["Falhou", "Não", "Refazer"].includes(v.resultado) ? "border-rose-200 bg-rose-50/50" : "border-slate-100"}
                           right={r === "valor" ? (<div className="flex items-center gap-1" onClick={e => e.stopPropagation()}><input disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} placeholder="valor" className="w-24 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />{item.unidade && <span className="text-xs text-slate-400 w-8">{item.unidade}</span>}</div>)
+                            : r === "hora" ? (<div onClick={e => e.stopPropagation()}><CampoHora compacto disabled={readOnly} value={v.valor} onChange={val => setSessaoValor(item.id, { valor: val })} /></div>)
+                            : r === "data" ? (<div onClick={e => e.stopPropagation()}><input type="date" disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} className="px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400" /></div>)
                             : r === "texto" ? null
                             : (<div className="flex gap-1 flex-wrap justify-end" onClick={e => e.stopPropagation()}>{opts.map(op => { const on = v.resultado === op; return <button key={op} disabled={readOnly} onClick={() => setSessaoValor(item.id, { resultado: on ? "" : op })} className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 ${corPilula(op, on)}`}>{op}</button>; })}</div>)}
                           abaixo={r === "texto" ? (<textarea disabled={readOnly} value={v.valor || ""} onChange={e => setSessaoValor(item.id, { valor: e.target.value })} onInput={autoGrow} placeholder="Descreva em detalhe o que foi feito…" rows={3} className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400 resize-none min-h-[4.5rem]" />) : null}
@@ -662,32 +691,17 @@ ${assinaturasHTML}
               </div>
             </section>)}
 
-            {ensaioItems.length > 0 && (<section>
-              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5"><Table2 size={15} className="text-blue-700" /> Planilha de campo</h2>
-                <div className="flex gap-2">{!readOnly && <button onClick={addEnsaioRow} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5"><Plus size={15} /> Adicionar ensaio</button>}{ensaioRows.length > 0 && <button onClick={exportPlanilha} className="text-sm bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5"><Download size={15} /> Baixar CSV</button>}</div>
-              </div>
-              <p className="text-xs text-slate-500 mb-2">Uma linha por ensaio — preencha quando for possível durante a execução.</p>
-              {ensaioRows.length === 0 ? <p className="text-sm text-slate-500 bg-slate-100 rounded-lg p-4">Clique em <b>Adicionar ensaio</b> para começar a preencher.</p> : (
-                <div className="overflow-auto rounded-lg border border-slate-200 max-h-96"><table className="w-full text-sm"><thead className="bg-slate-100 sticky top-0"><tr><th className="px-2 py-2 text-left font-semibold text-slate-500 w-10">#</th>{ensaioItems.map(i => <th key={i.id} className="px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">{i.titulo}{i.unidade ? ` (${i.unidade})` : ""}</th>)}<th className="px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">O que foi feito</th><th className="w-8"></th></tr></thead>
-                  <tbody>{ensaioRows.map((r, idx) => (<tr key={idx} className={idx % 2 ? "bg-slate-50" : "bg-white"}>
-                    <td className="px-2 py-1 text-slate-400 align-top">{idx + 1}</td>
-                    {ensaioItems.map(i => { const resp = respostaDe(i); const opts = opcoesDe(i); const key = `${idx}:${i.id}`; return (<td key={i.id} className="px-1 py-1 align-top">
-                      {resp === "valor" ? (<input disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-2 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent disabled:text-slate-400" />)
-                        : resp === "texto" ? (celulasAbertas.has(key) ? (<div className="min-w-48"><textarea autoFocus disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} onInput={autoGrow} rows={2} className="w-full px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 resize-none" /><button onClick={() => toggleCelula(key)} className="text-[11px] text-blue-700 mt-0.5">fechar</button></div>) : (<button onClick={() => toggleCelula(key)} className="text-xs text-blue-700 hover:text-blue-900 font-medium underline decoration-dotted">{(r[i.id] || "").trim() ? "editar texto" : "abrir"}</button>))
-                        : (<select disabled={readOnly} value={r[i.id] ?? ""} onChange={e => setEnsaioCell(idx, i.id, e.target.value)} className="w-full min-w-24 px-1 py-1 text-sm border border-transparent hover:border-slate-200 focus:border-blue-400 rounded outline-none bg-transparent disabled:text-slate-400"><option value=""></option>{opts.map(op => <option key={op} value={op}>{op}</option>)}</select>)}
-                    </td>); })}
-                    <td className="px-1 py-1 align-top">{celulasAbertas.has(`${idx}:_obs`) ? (<div className="min-w-56"><textarea autoFocus disabled={readOnly} value={r._obs ?? ""} onChange={e => setEnsaioCell(idx, "_obs", e.target.value)} onInput={autoGrow} rows={2} placeholder="O que foi feito, observações…" className="w-full px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 resize-none" /><button onClick={() => toggleCelula(`${idx}:_obs`)} className="text-[11px] text-blue-700 mt-0.5">fechar</button></div>) : (<button onClick={() => toggleCelula(`${idx}:_obs`)} className="text-xs text-blue-700 hover:text-blue-900 font-medium underline decoration-dotted">{(r._obs || "").trim() ? "editar" : "abrir"}</button>)}</td>
-                    <td className="px-1 align-top">{!readOnly && <button onClick={() => delEnsaioRow(idx)} className="text-slate-300 hover:text-rose-500"><Trash2 size={14} /></button>}</td>
-                  </tr>))}</tbody></table></div>
-              )}
-            </section>)}
+            {ensaioItems.length > 0 && (
+              <PlanilhaCampo key={currentExp?.id || "novo"} itens={ensaioItems} rows={ensaioRows} readOnly={readOnly}
+                onAdd={addEnsaioRow} onSetCell={setEnsaioCell} onDel={delEnsaioRow} onExport={exportPlanilha} />
+            )}
 
             <div className="flex flex-wrap gap-2 pt-2">
               <button onClick={onSaveClick} disabled={busy || readOnly} title={readOnly ? "Somente leitura" : "Salvar na nuvem"} className="text-sm bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg flex items-center gap-1.5">{readOnly ? <Lock size={15} /> : <Save size={15} />} Salvar</button>
               <button onClick={() => setShowReport(true)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 py-2 rounded-lg flex items-center gap-1.5"><FileText size={15} /> Baixar folha de campo (PDF)</button>
               <button onClick={exportJSON} className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5"><FileJson size={15} className="text-blue-700" /> Exportar (.json)</button>
               <label className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer"><Upload size={15} className="text-blue-700" /> Importar<input type="file" accept=".json" onChange={importJSON} className="hidden" /></label>
+              {currentExp?.folhaPdf?.webViewLink && <a href={currentExp.folhaPdf.webViewLink} target="_blank" rel="noreferrer" title="Abrir a folha de campo salva no Google Drive" className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5"><ExternalLink size={15} className="text-blue-700" /> Folha no Drive</a>}
             </div>
           </>)}
         </div>)}
@@ -762,7 +776,7 @@ ${assinaturasHTML}
             </li>); })}</ul>); })()}
       </div></div>)}
 
-      {showSaveDlg && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaveDlg(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}><h3 className="font-bold text-slate-800 mb-1">Salvar experimento</h3><p className="text-xs text-slate-500 mb-3">Dê um nome para salvar na nuvem do time.</p><input value={saveTitle} onChange={e => setSaveTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && persist(saveTitle)} placeholder="Nome do experimento" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" autoFocus /><div className="flex gap-2 mt-4"><button onClick={() => setShowSaveDlg(false)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={() => persist(saveTitle)} disabled={busy} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold">Salvar</button></div></div></div>)}
+      {showSaveDlg && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaveDlg(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}><h3 className="font-bold text-slate-800 mb-1">Salvar experimento</h3><p className="text-xs text-slate-500 mb-3">Dê um nome para salvar na nuvem do time.</p><input value={saveTitle} onChange={e => setSaveTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && salvar(saveTitle)} placeholder="Nome do experimento" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" autoFocus /><div className="flex gap-2 mt-4"><button onClick={() => setShowSaveDlg(false)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={() => salvar(saveTitle)} disabled={busy} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold">Salvar</button></div></div></div>)}
 
       {showReport && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowReport(false)}><div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[88vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="p-6 text-slate-800">
         <div className="flex items-center gap-2 border-b-2 border-blue-700 pb-2 mb-4"><img src="/hydrone-mark.png" alt="Hydrone" className="h-6 w-6 shrink-0" /><div><h2 className="text-lg font-bold">Folha de Campo</h2><p className="text-xs text-slate-500">{meta.nome || "Sem nome"} · Hydrone</p></div></div>

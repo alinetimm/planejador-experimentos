@@ -5,10 +5,9 @@ import {
 } from "firebase/auth";
 import {
   collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
-  query, orderBy, onSnapshot, serverTimestamp, arrayUnion, arrayRemove, runTransaction,
+  query, orderBy, onSnapshot, serverTimestamp, arrayUnion, arrayRemove,
 } from "firebase/firestore";
 import { normalizarVacuo, migrarCategoria } from "./lib/vacuo";
-import { CATEGORIAS } from "./lib/requisitos";
 
 
 export function watchAuth(callback) {
@@ -175,10 +174,15 @@ export function canEdit(exp, uid, admin) {
 // ──────────────────────── ANEXOS ────────────────────────
 // Fotos, vídeos e logs ligados a um experimento (e, opcionalmente, a um item de
 // checklist via itemId). O navegador envia o arquivo direto para o Google Drive,
-// em Hydrone/{data do experimento}/{tipo de experimento}, com o token Google de
-// quem está anexando. Firebase Storage e Cloud Functions ficaram de fora porque
-// exigem o plano Blaze. O doc do anexo só é criado depois que o Drive confirma
-// o arquivo, então não existe anexo "pendente".
+// com o token Google de quem está enviando, nesta árvore:
+//
+//   Hydrone / DD-MM-AAAA / Folha_de_Campo - {experimento}.pdf
+//                        / Fotos / …
+//                        / Logs / …
+//
+// Firebase Storage e Cloud Functions ficaram de fora porque exigem o plano Blaze.
+// O doc do anexo só é criado depois que o Drive confirma o arquivo, então não
+// existe anexo "pendente" no Firestore.
 
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
@@ -250,45 +254,39 @@ async function driveApi(caminho, { metodo = "GET", corpo, params = {} } = {}) {
 const aspasQuery = (s) => String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 
 /**
- * Id da subpasta `nome` dentro de `paiId`, criando-a se preciso. Duas pessoas
- * anexando ao mesmo tempo criariam pastas homônimas (o Drive permite), por isso
- * o id fica em drive_folders/ e quem perde a transação passa a usar a pasta de
- * quem ganhou.
+ * Id da pasta `folderName` dentro de `parentFolderId`, criando-a só se ainda não
+ * existir — enviar mais arquivos no mesmo dia reaproveita as pastas do dia.
  */
-async function pastaIdempotente(paiId, nome) {
-  const cacheRef = doc(db, "drive_folders", `${paiId}:${nome}`.replace(/\//g, "_"));
-  const cache = await getDoc(cacheRef);
-  if (cache.exists()) return cache.data().folderId;
-
+export async function findOrCreateFolder(folderName, parentFolderId) {
   const achou = await driveApi("/files", { params: {
-    q: `name='${aspasQuery(nome)}' and '${aspasQuery(paiId)}' in parents and mimeType='${TIPO_PASTA}' and trashed=false`,
+    q: `name='${aspasQuery(folderName)}' and '${aspasQuery(parentFolderId)}' in parents and mimeType='${TIPO_PASTA}' and trashed=false`,
     fields: "files(id)", pageSize: "1", includeItemsFromAllDrives: "true",
   } });
-  const existente = achou.files?.[0]?.id;
-  const minha = existente || (await driveApi("/files", { metodo: "POST", corpo: { name: nome, mimeType: TIPO_PASTA, parents: [paiId] }, params: { fields: "id" } })).id;
-
-  const vencedora = await runTransaction(db, async (tx) => {
-    const atual = await tx.get(cacheRef);
-    if (atual.exists()) return atual.data().folderId;
-    tx.set(cacheRef, { folderId: minha, nome, parentId: paiId, createdAt: serverTimestamp() });
-    return minha;
-  });
-  if (vencedora !== minha && !existente) {
-    driveApi(`/files/${minha}`, { metodo: "PATCH", corpo: { trashed: true } }).catch(() => {});
-  }
-  return vencedora;
+  if (achou.files?.[0]?.id) return achou.files[0].id;
+  const criada = await driveApi("/files", { metodo: "POST", corpo: { name: folderName, mimeType: TIPO_PASTA, parents: [parentFolderId] }, params: { fields: "id" } });
+  return criada.id;
 }
 
-const hojeLocal = () => {
+/** "2026-10-21" → "21-10-2026"; sem data válida, usa o dia de hoje. */
+export function nomePastaData(dataIso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dataIso || "");
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
-const rotuloCategoria = (modo) => CATEGORIAS.find(c => c.id === migrarCategoria(modo))?.label || "Outros";
+  return `${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
+}
 
-/** Pasta Hydrone/{data}/{tipo} do experimento, criada se ainda não existir. */
-async function pastaDoExperimento(exp) {
-  const pastaData = await pastaIdempotente(PASTA_RAIZ, /^\d{4}-\d{2}-\d{2}$/.test(exp.data || "") ? exp.data : hojeLocal());
-  return pastaIdempotente(pastaData, rotuloCategoria(exp.modo));
+export const linkPastaDrive = (pastaId) => `https://drive.google.com/drive/folders/${pastaId}`;
+
+/**
+ * Pastas de destino de um envio: a do dia na raiz Hydrone e, dentro dela, Fotos
+ * e Logs. As duas subpastas são criadas sempre, para todo dia ter a mesma forma.
+ * @returns {Promise<{dataId: string, fotosId: string, logsId: string, nomeData: string}>}
+ */
+export async function pastasDoEnvio(dataIso) {
+  const nomeData = nomePastaData(dataIso);
+  const dataId = await findOrCreateFolder(nomeData, PASTA_RAIZ);
+  const [fotosId, logsId] = await Promise.all([findOrCreateFolder("Fotos", dataId), findOrCreateFolder("Logs", dataId)]);
+  return { dataId, fotosId, logsId, nomeData };
 }
 
 function inferKind(file) {
@@ -346,24 +344,25 @@ function enviarComProgresso(sessao, file, tipo, onProgress) {
   });
 }
 
+/** Fotos e vídeos vão para "fotos"; qualquer outro arquivo é log. */
+export const grupoDoAnexo = (att) => att.grupo || (att.kind === "photo" || att.kind === "video" ? "fotos" : "logs");
+
 /**
- * Envia o arquivo ao Drive e registra o anexo no Firestore. Exige conectarDrive() antes.
+ * Envia o arquivo para `pastaId` no Drive e registra o anexo no Firestore.
+ * Exige conectarDrive() antes.
  * @param {string} expId
  * @param {File} file
- * @param {{itemId?: string|null, onProgress?: (pct:number)=>void}} opts
+ * @param {{pastaId: string, grupo: "fotos"|"logs", itemId?: string|null, onProgress?: (pct:number)=>void}} opts
  */
-export async function uploadAttachment(expId, file, { itemId = null, onProgress } = {}) {
+export async function uploadAttachment(expId, file, { pastaId, grupo, itemId = null, onProgress } = {}) {
   const u = auth.currentUser;
   if (!u) throw new Error("não autenticado.");
   const kind = inferKind(file);
   const tipo = file.type || "application/octet-stream";
 
-  const exp = (await getDoc(doc(db, "experiments", expId))).data() || {};
-  const pastaTipo = await pastaDoExperimento(exp);
-
   const sessao = await abrirSessaoDeUpload({
     name: file.name || "arquivo",
-    parents: [pastaTipo],
+    parents: [pastaId],
     appProperties: { expId, itemId: itemId || "", uid: u.uid },
   }, tipo, file.size);
   const criado = await enviarComProgresso(sessao, file, tipo, onProgress);
@@ -372,7 +371,7 @@ export async function uploadAttachment(expId, file, { itemId = null, onProgress 
   try {
     const refd = await addDoc(collection(db, "experiments", expId, "attachments"), {
       type: file.type?.startsWith("image/") ? "photo" : "file",
-      kind, itemId,
+      kind, grupo, itemId,
       fileName: file.name || "arquivo",
       contentType: tipo,
       size: file.size || 0,
@@ -427,24 +426,23 @@ export async function deleteAttachment(expId, att) {
 // ──────────────────────── FOLHA DE CAMPO EM PDF ────────────────────────
 
 /**
- * Grava a folha de campo em PDF na pasta do experimento no Drive. Na primeira vez
+ * Grava a folha de campo em PDF em `pastaId` (a pasta do dia). Na primeira vez
  * cria o arquivo; nas seguintes substitui o conteúdo do MESMO arquivo, então o
  * link não muda e as versões anteriores ficam no histórico de versões do Drive.
  * Exige conectarDrive() antes.
  * @returns {Promise<{fileId, webViewLink, pastaId, nome}>}
  */
-export async function salvarFolhaNoDrive(expId, pdf, nomeArquivo) {
+export async function salvarFolhaNoDrive(expId, pdf, nomeArquivo, pastaId) {
   const exp = (await getDoc(doc(db, "experiments", expId))).data() || {};
-  const pastaTipo = await pastaDoExperimento(exp);
   const anterior = exp.folhaPdf;
 
   let arquivo = null;
   if (anterior?.fileId) {
     try {
       const params = new URLSearchParams({ uploadType: "media", supportsAllDrives: "true", fields: "id,webViewLink,trashed" });
-      // A data ou o tipo mudaram desde o último salvamento: o PDF muda de pasta junto.
-      if (anterior.pastaId && anterior.pastaId !== pastaTipo) {
-        params.set("addParents", pastaTipo);
+      // A data mudou desde o último envio: o PDF muda de pasta junto.
+      if (anterior.pastaId && anterior.pastaId !== pastaId) {
+        params.set("addParents", pastaId);
         params.set("removeParents", anterior.pastaId);
       }
       const r = await fetch(`${DRIVE_UPLOAD}/${anterior.fileId}?${params}`, {
@@ -466,13 +464,13 @@ export async function salvarFolhaNoDrive(expId, pdf, nomeArquivo) {
   if (!arquivo) {
     const sessao = await abrirSessaoDeUpload({
       name: nomeArquivo,
-      parents: [pastaTipo],
+      parents: [pastaId],
       appProperties: { expId, folhaDeCampo: "1" },
     }, "application/pdf", pdf.size);
     arquivo = await enviarComProgresso(sessao, pdf, "application/pdf");
   }
 
-  const folhaPdf = { fileId: arquivo.id, webViewLink: arquivo.webViewLink, pastaId: pastaTipo, nome: nomeArquivo };
+  const folhaPdf = { fileId: arquivo.id, webViewLink: arquivo.webViewLink, pastaId, nome: nomeArquivo };
   await updateDoc(doc(db, "experiments", expId), { folhaPdf: { ...folhaPdf, atualizadoEm: serverTimestamp() } });
   return folhaPdf;
 }

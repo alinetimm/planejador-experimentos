@@ -53,14 +53,5 @@ service cloud.firestore {
         allow update, delete: if podeEditarExp(expId);
       }
     }
-
-    // Cache de ids de pasta do Drive ({data}/{tipo}), para dois uploads simultâneos
-    // não criarem pastas homônimas. Só nasce uma vez: quem perde a transação
-    // reaproveita o id de quem ganhou, então nunca há update.
-    match /drive_folders/{chave} {
-      allow read: if autenticado();
-      allow create: if autenticado() && request.resource.data.folderId is string;
-      allow update, delete: if false;
-    }
   }
 }

@@ -1,17 +1,16 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import {
-  Waves, Gauge, Rocket, ClipboardList, ClipboardCheck, Download, Upload, Plus, Trash2, BookOpen, ChevronDown,
-  User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileJson, FileText,
-  DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Table2, Copy, ExternalLink,
+  Waves, Gauge, Rocket, ClipboardList, ClipboardCheck, Plus, Trash2, ChevronDown,
+  User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileText,
+  DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Copy, CloudUpload,
 } from "lucide-react";
 import * as cloud from "./cloud";
 import { download, toCSV } from "./lib/stats";
 import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORDEM_SUGERIDA, RESPOSTAS, respostaDe, opcoesDe, CATEGORIAS, CATEGORIA_PADRAO, FASES_MISSAO, novaLinhaPlanilha } from "./lib/requisitos";
 import AnalisarDados from "./AnalisarDados";
 import TesteVacuo from "./TesteVacuo";
-import Anexos from "./Anexos";
+import Finalizar from "./Finalizar";
 import PlanilhaCampo, { CampoHora } from "./PlanilhaCampo";
-import { gerarPdfFolha } from "./lib/folhaPdf";
 import { VACUO_DEF, exigeTesteVacuo, migrarCategoria, statusEstanqueidade, quedaPressao, ROTULO_STATUS, UNIDADE_PRESSAO, num } from "./lib/vacuo";
 
 // Data local: toISOString é UTC e, depois das 21h no Brasil, já devolve o dia seguinte.
@@ -85,6 +84,9 @@ export default function App() {
   const [ensaioRows, setEnsaioRows] = useState([]);
   const [sessaoValores, setSessaoValores] = useState({});
   const [testeVacuo, setTesteVacuo] = useState({ ...VACUO_DEF });
+  // Fotos/vídeos e logs escolhidos na Etapa 3 e ainda não enviados ao Drive. São
+  // objetos File, que não sobrevivem a recarregar a página nem vão para o bundle.
+  const [pendentes, setPendentes] = useState({ fotos: [], logs: [] });
   const [detalheAbertos, setDetalheAbertos] = useState(() => new Set());
   const [explicacaoAbertos, setExplicacaoAbertos] = useState(() => new Set());
   const [gruposAlternados, setGruposAlternados] = useState(() => new Set());
@@ -104,6 +106,7 @@ export default function App() {
     setEnsaioRows(b?.ensaioRows || []);
     setSessaoValores(b?.sessaoValores || {});
     setTesteVacuo({ ...VACUO_DEF, ...(b?.testeVacuo || {}) });
+    setPendentes({ fotos: [], logs: [] });
   };
   const toastTimer = useRef(null);
   const flash = (m, ms = 2200) => { clearTimeout(toastTimer.current); setToast(m); toastTimer.current = setTimeout(() => setToast(""), ms); };
@@ -150,31 +153,7 @@ export default function App() {
     } catch { flash("Não foi possível salvar (sem permissão?)"); return null; }
     finally { setBusy(false); setShowSaveDlg(false); setSaveTitle(""); }
   };
-  // Salvar também grava a folha de campo em PDF no Drive, substituindo a versão
-  // anterior. Se o acesso ao Drive expirou, o popup do Google precisa nascer do
-  // próprio clique — por isso a conexão vem antes de qualquer outra espera.
-  const salvar = async (title) => {
-    let drive = cloud.driveConectado();
-    let motivo = "";
-    if (!drive && cloud.podeUsarDrive()) {
-      try { await cloud.conectarDrive(); drive = true; }
-      catch (e) { motivo = cloud.explicarErroDrive(e); }
-    }
-    const salvo = await persist(title);
-    if (!salvo) return;
-    if (!drive) { if (motivo) flash(`Salvo, mas o PDF não foi para o Drive: ${motivo}`, 8000); return; }
-    setBusy(true);
-    flash("Salvo — gerando a folha de campo em PDF…", 120000);
-    try {
-      const pdf = await gerarPdfFolha(buildReportHTML());
-      const folhaPdf = await cloud.salvarFolhaNoDrive(salvo.id, pdf, `Folha de campo — ${salvo.title}.pdf`);
-      setCurrentExp(prev => (prev?.id === salvo.id ? { ...prev, folhaPdf } : prev));
-      flash("Salvo — folha de campo em PDF atualizada no Drive", 3500);
-    } catch (e) {
-      flash(`Salvo, mas o PDF não foi para o Drive: ${cloud.explicarErroDrive(e)}`, 8000);
-    } finally { setBusy(false); }
-  };
-  const onSaveClick = () => { if (currentExp?.id && canEditCurrent) salvar(); else setShowSaveDlg(true); };
+  const onSaveClick = () => { if (currentExp?.id && canEditCurrent) persist(); else setShowSaveDlg(true); };
 
   const openExperiment = async (summary) => {
     setBusy(true);
@@ -296,7 +275,7 @@ export default function App() {
   };
 
   // ── Relatório (PDF) ──
-  // Folha de campo: mesma seleção da Tela 3, em formato pra imprimir e preencher à mão.
+  // Folha de campo: mesma seleção da etapa Experimento, em formato pra imprimir e preencher à mão.
   // Item já preenchido no app sai impresso com o valor; vazio sai como caixa/linha em branco —
   // então imprimir antes do ensaio dá uma folha em branco, e depois, um registro preenchido.
   const buildReportHTML = () => {
@@ -472,9 +451,9 @@ ${assinaturasHTML}
             {headerActions}
           </div>
           <nav className="flex gap-1 flex-wrap">
-            <button onClick={() => setStep(1)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 1 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 1 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>1</span><ClipboardCheck size={16} /><span>Sobre</span></button>
-            <button onClick={() => setStep(2)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 2 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 2 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>2</span><ClipboardList size={16} /><span>Montar checklist</span></button>
-            <button onClick={() => setStep(3)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 3 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 3 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>3</span><Table2 size={16} /><span>Preencher checklist</span></button>
+            <button onClick={() => setStep(1)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 1 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 1 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>1</span><ClipboardList size={16} /><span>Sobre</span></button>
+            <button onClick={() => setStep(2)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 2 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 2 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>2</span><ClipboardCheck size={16} /><span>Experimento</span></button>
+            <button onClick={() => setStep(3)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 3 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 3 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>3</span><CloudUpload size={16} /><span>Finalizar e enviar pro drive</span></button>
           </nav>
         </div>
       </header>
@@ -482,7 +461,7 @@ ${assinaturasHTML}
       <main className="max-w-6xl mx-auto px-4 py-6">
         {readOnly && (<div className="mb-4 flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-sm"><Lock size={15} className="shrink-0" /> Somente leitura — você não é dono nem editor deste experimento. As alterações não serão salvas.</div>)}
 
-        {/* TELA 1 — SOBRE O EXPERIMENTO */}
+        {/* ETAPA 1 — SOBRE: configuração do ensaio e montagem do checklist */}
         {step === 1 && (<div className="space-y-6">
           <section className="bg-white rounded-xl border border-slate-200 p-4">
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Categoria do experimento</h2>
@@ -541,44 +520,15 @@ ${assinaturasHTML}
             </div>
           </section>
 
-          {/* Pré-check de estanqueidade — acoplado ao Experimento de campo, não é
-              mais um experimento separado. Reprovar sinaliza, mas não bloqueia. */}
-          {exigeTesteVacuo(categoriaAtiva) && (
-            <TesteVacuo valor={testeVacuo} onChange={setTesteVacuo} readOnly={readOnly} />
-          )}
-
-          <Anexos expId={currentExp?.id} readOnly={readOnly} />
-
-          {currentExp?.id && isOwnerCurrent && (<section className="bg-white rounded-xl border border-slate-200 p-4">
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Share2 size={13} className="text-blue-700" /> Compartilhar edição</h3>
-            <div className="flex gap-2">
-              <select id="editorSel" className="flex-1 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400"><option value="">Escolher pessoa…</option>{profilesList.filter(p => p.uid !== currentExp.ownerId && !(currentExp.editors || []).includes(p.uid)).map(p => <option key={p.uid} value={p.uid}>{p.name}</option>)}</select>
-              <button onClick={() => { const el = document.getElementById("editorSel"); if (el?.value) { addEditor(el.value); el.value = ""; } }} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 rounded-lg font-medium">Conceder</button>
-            </div>
-            {(currentExp.editors || []).length > 0 && (<div className="flex flex-wrap gap-1.5 mt-2">{currentExp.editors.map(uid => { const p = profilesList.find(x => x.uid === uid); return (<span key={uid} className="flex items-center gap-1 text-xs bg-blue-50 text-blue-800 rounded-full pl-2 pr-1 py-0.5">{p?.name || uid.slice(0, 6)}<button onClick={() => removeEditor(uid)} className="hover:text-rose-500"><X size={12} /></button></span>); })}</div>)}
-          </section>)}
-
-          <button onClick={() => setStep(2)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Próximo: Montar checklist →</button>
-        </div>)}
-
-        {/* TELA 2 — O QUE MONITORAR (só a escolha) */}
-        {step === 2 && (<div className="space-y-6">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <button onClick={() => setStep(1)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> Sobre o experimento</button>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-semibold text-blue-800 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 flex items-center gap-1.5">
-                {(() => { const Icone = ICONES_CATEGORIA[categoriaMeta(categoriaAtiva).icone] || Waves; return <Icone size={12} />; })()}
-                {categoriaMeta(categoriaAtiva).label}
-              </span>
-              <button onClick={() => setStep(1)} title="Trocar modo do ensaio" className="text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-full px-2.5 py-1">{resumoModoFases(categoriaAtiva, meta)}</button>
-              <button onClick={() => setLibEditMode(v => !v)} className={`text-sm px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 ${libEditMode ? "bg-blue-700 text-white" : "bg-white border border-slate-200 text-slate-600"}`}><Pencil size={14} /> {libEditMode ? "Concluir edição" : "Editar biblioteca"}</button>
-              {libEditMode && <button onClick={restaurarPadrao} className="text-sm px-3 py-1.5 rounded-lg font-medium bg-white border border-slate-200 text-slate-600 flex items-center gap-1.5"><RotateCcw size={14} /> Restaurar padrão</button>}
-            </div>
-          </div>
-
           <section>
-            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-1">Montar o checklist</h2>
-            <p className="text-xs text-slate-500 mb-3">Marque o que vai entrar no checklist deste experimento — você preenche os resultados na próxima tela, durante o ensaio. Toque no "?" de um item para ver a explicação; dentro dela, "detalhe técnico" mostra o rigor por trás.</p>
+            <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5"><ClipboardList size={15} className="text-blue-700" /> Montar o checklist</h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button onClick={() => setLibEditMode(v => !v)} className={`text-sm px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 ${libEditMode ? "bg-blue-700 text-white" : "bg-white border border-slate-200 text-slate-600"}`}><Pencil size={14} /> {libEditMode ? "Concluir edição" : "Editar biblioteca"}</button>
+                {libEditMode && <button onClick={restaurarPadrao} className="text-sm px-3 py-1.5 rounded-lg font-medium bg-white border border-slate-200 text-slate-600 flex items-center gap-1.5"><RotateCcw size={14} /> Restaurar padrão</button>}
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 mb-3">Marque o que vai entrar no checklist deste experimento — você preenche os resultados na etapa Experimento, durante o ensaio. Toque no "?" de um item para ver a explicação; dentro dela, "detalhe técnico" mostra o rigor por trás.</p>
             <div className="space-y-3">
               {blocosAtivos.map((bloco, idx) => {
                 const ids = bloco.itens.map(i => i.id);
@@ -621,21 +571,27 @@ ${assinaturasHTML}
             {libEditMode && <button onClick={openNewBloco} className="mt-3 text-sm text-blue-700 font-medium flex items-center gap-1"><Plus size={15} /> Novo bloco</button>}
           </section>
 
-          <button onClick={() => setStep(3)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Próximo: Preencher checklist →</button>
+          <button onClick={() => setStep(2)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Ir para o Experimento (Campo) →</button>
         </div>)}
 
-        {/* TELA 3 — COLETA DE DADOS */}
-        {step === 3 && (<div className="space-y-6">
+        {/* ETAPA 2 — EXPERIMENTO: execução em campo */}
+        {step === 2 && (<div className="space-y-6">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <button onClick={() => setStep(2)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> Montar checklist</button>
+            <button onClick={() => setStep(1)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> Sobre</button>
             <button onClick={() => setStep(1)} title="Trocar modo do ensaio" className="text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-full px-2.5 py-1">{resumoModoFases(categoriaAtiva, meta)}</button>
           </div>
+
+          {/* Pré-check de estanqueidade, feito no local antes da água — por isso fica
+              na etapa de campo. Reprovar sinaliza, mas não bloqueia. */}
+          {exigeTesteVacuo(categoriaAtiva) && (
+            <TesteVacuo valor={testeVacuo} onChange={setTesteVacuo} readOnly={readOnly} />
+          )}
 
           {selectedFlat.length === 0 ? (
             <div className="text-center bg-white rounded-xl border border-slate-200 p-8">
               <ClipboardList size={28} className="text-slate-300 mx-auto mb-2" />
-              <p className="text-sm text-slate-500 mb-4">Você ainda não montou o checklist deste experimento. Volte para <b>Montar checklist</b> e marque as variáveis do ensaio.</p>
-              <button onClick={() => setStep(2)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-lg font-medium">Montar o checklist</button>
+              <p className="text-sm text-slate-500 mb-4">Você ainda não montou o checklist deste experimento. Volte para <b>Sobre</b> e marque as variáveis do ensaio em <b>Montar o checklist</b>.</p>
+              <button onClick={() => setStep(1)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-lg font-medium">Montar o checklist</button>
             </div>
           ) : (<>
             {sessaoItems.length > 0 && (<section className="bg-white rounded-xl border border-slate-200 p-3">
@@ -696,14 +652,41 @@ ${assinaturasHTML}
                 onAdd={addEnsaioRow} onSetCell={setEnsaioCell} onDel={delEnsaioRow} onExport={exportPlanilha} />
             )}
 
-            <div className="flex flex-wrap gap-2 pt-2">
-              <button onClick={onSaveClick} disabled={busy || readOnly} title={readOnly ? "Somente leitura" : "Salvar na nuvem"} className="text-sm bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg flex items-center gap-1.5">{readOnly ? <Lock size={15} /> : <Save size={15} />} Salvar</button>
-              <button onClick={() => setShowReport(true)} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 py-2 rounded-lg flex items-center gap-1.5"><FileText size={15} /> Baixar folha de campo (PDF)</button>
-              <button onClick={exportJSON} className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5"><FileJson size={15} className="text-blue-700" /> Exportar (.json)</button>
-              <label className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer"><Upload size={15} className="text-blue-700" /> Importar<input type="file" accept=".json" onChange={importJSON} className="hidden" /></label>
-              {currentExp?.folhaPdf?.webViewLink && <a href={currentExp.folhaPdf.webViewLink} target="_blank" rel="noreferrer" title="Abrir a folha de campo salva no Google Drive" className="text-sm bg-white border border-slate-200 hover:border-blue-400 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5"><ExternalLink size={15} className="text-blue-700" /> Folha no Drive</a>}
+            <div className="flex flex-wrap items-center gap-2 pt-2">
+              <button onClick={onSaveClick} disabled={busy || readOnly} title={readOnly ? "Somente leitura" : "Salvar o progresso na nuvem"} className="text-sm bg-white border border-slate-200 hover:border-blue-400 disabled:opacity-50 text-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5">{readOnly ? <Lock size={15} /> : <Save size={15} className="text-blue-700" />} Salvar progresso</button>
+              <span className="text-xs text-slate-500">Grava o que foi preenchido até aqui. O envio ao Drive fica na próxima etapa.</span>
             </div>
+            <button onClick={() => setStep(3)} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">Finalizar ensaio e anexar arquivos →</button>
           </>)}
+        </div>)}
+        {/* ETAPA 3 — FINALIZAR: evidências e envio ao Drive */}
+        {step === 3 && (<div className="space-y-6">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <button onClick={() => setStep(2)} className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={14} /> Experimento</button>
+          </div>
+
+          <Finalizar
+            expId={currentExp?.id} readOnly={readOnly}
+            nomeExperimento={(currentExp?.title || meta.nome || "Sem título").toString().trim().slice(0, 120) || "Sem título"}
+            dataIso={meta.data} folhaPdf={currentExp?.folhaPdf}
+            resumo={{ verificados: sessaoVerificados, totalChecklist: sessaoItems.length, falhas: sessaoFalhas, ensaios: ensaioRows.length }}
+            pendentes={pendentes} setPendentes={setPendentes}
+            onSalvarExperimento={() => persist()}
+            gerarHtmlFolha={buildReportHTML}
+            onFolhaSalva={(folhaPdf) => setCurrentExp(prev => (prev ? { ...prev, folhaPdf } : prev))}
+            onBaixarPdf={() => setShowReport(true)}
+            onBaixarCsv={ensaioRows.length ? exportPlanilha : null}
+            onExportarJson={exportJSON} onImportarJson={importJSON} />
+
+          {currentExp?.id && isOwnerCurrent && (<section className="bg-white rounded-xl border border-slate-200 p-4">
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Share2 size={13} className="text-blue-700" /> Compartilhar edição</h3>
+            <div className="flex gap-2">
+              <select id="editorSel" className="flex-1 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400"><option value="">Escolher pessoa…</option>{profilesList.filter(p => p.uid !== currentExp.ownerId && !(currentExp.editors || []).includes(p.uid)).map(p => <option key={p.uid} value={p.uid}>{p.name}</option>)}</select>
+              <button onClick={() => { const el = document.getElementById("editorSel"); if (el?.value) { addEditor(el.value); el.value = ""; } }} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 rounded-lg font-medium">Conceder</button>
+            </div>
+            {(currentExp.editors || []).length > 0 && (<div className="flex flex-wrap gap-1.5 mt-2">{currentExp.editors.map(uid => { const p = profilesList.find(x => x.uid === uid); return (<span key={uid} className="flex items-center gap-1 text-xs bg-blue-50 text-blue-800 rounded-full pl-2 pr-1 py-0.5">{p?.name || uid.slice(0, 6)}<button onClick={() => removeEditor(uid)} className="hover:text-rose-500"><X size={12} /></button></span>); })}</div>)}
+          </section>)}
+
         </div>)}
       </main>
 
@@ -776,7 +759,7 @@ ${assinaturasHTML}
             </li>); })}</ul>); })()}
       </div></div>)}
 
-      {showSaveDlg && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaveDlg(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}><h3 className="font-bold text-slate-800 mb-1">Salvar experimento</h3><p className="text-xs text-slate-500 mb-3">Dê um nome para salvar na nuvem do time.</p><input value={saveTitle} onChange={e => setSaveTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && salvar(saveTitle)} placeholder="Nome do experimento" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" autoFocus /><div className="flex gap-2 mt-4"><button onClick={() => setShowSaveDlg(false)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={() => salvar(saveTitle)} disabled={busy} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold">Salvar</button></div></div></div>)}
+      {showSaveDlg && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaveDlg(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}><h3 className="font-bold text-slate-800 mb-1">Salvar experimento</h3><p className="text-xs text-slate-500 mb-3">Dê um nome para salvar na nuvem do time.</p><input value={saveTitle} onChange={e => setSaveTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && persist(saveTitle)} placeholder="Nome do experimento" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" autoFocus /><div className="flex gap-2 mt-4"><button onClick={() => setShowSaveDlg(false)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={() => persist(saveTitle)} disabled={busy} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold">Salvar</button></div></div></div>)}
 
       {showReport && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowReport(false)}><div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[88vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="p-6 text-slate-800">
         <div className="flex items-center gap-2 border-b-2 border-blue-700 pb-2 mb-4"><img src="/hydrone-mark.png" alt="Hydrone" className="h-6 w-6 shrink-0" /><div><h2 className="text-lg font-bold">Folha de Campo</h2><p className="text-xs text-slate-500">{meta.nome || "Sem nome"} · Hydrone</p></div></div>

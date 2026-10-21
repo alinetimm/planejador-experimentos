@@ -10,13 +10,13 @@ import { loadBlocos, saveBlocos, resetBlocos, novoItemVazio, novoBlocoVazio, ORD
 import AnalisarDados from "./AnalisarDados";
 import TesteVacuo from "./TesteVacuo";
 import Finalizar from "./Finalizar";
+import { gerarPdfFolha } from "./lib/folhaPdf";
 import PlanilhaCampo, { CampoHora } from "./PlanilhaCampo";
 import { VACUO_DEF, exigeTesteVacuo, migrarCategoria, statusEstanqueidade, quedaPressao, ROTULO_STATUS, UNIDADE_PRESSAO, num } from "./lib/vacuo";
 
 // Data local: toISOString é UTC e, depois das 21h no Brasil, já devolve o dia seguinte.
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const META_DEF = { nome: "", descricao: "", responsavel: "", data: today(), equipamento: "", local: "", notas: "", modoEnsaio: "os_dois", fases: [] };
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const ICONES_CATEGORIA = { Waves, Gauge, Rocket };
 const categoriaMeta = (id) => CATEGORIAS.find(c => c.id === id) || CATEGORIAS[0];
 const MODOS_ENSAIO = [{ id: "voo", label: "Voo" }, { id: "sub", label: "Subaquático" }, { id: "os_dois", label: "Os dois" }];
@@ -70,7 +70,6 @@ export default function App() {
   const [showSaves, setShowSaves] = useState(false);
   const [showSaveDlg, setShowSaveDlg] = useState(false);
   const [saveTitle, setSaveTitle] = useState("");
-  const [showReport, setShowReport] = useState(false);
   const [showAnalise, setShowAnalise] = useState(false);
   const [toast, setToast] = useState("");
   const [deferred, setDeferred] = useState(null);
@@ -141,25 +140,36 @@ export default function App() {
   const readOnly = !!currentExp && !canEditCurrent;
   const isOwnerCurrent = currentExp ? (isAdmin || currentExp.ownerId === currentUser?.uid) : true;
 
-  const persist = async (title) => {
-    if (!currentUser) return;
+  // O nome é obrigatório: é o título na lista do time e o nome da pasta do
+  // experimento no Drive. O campo "Nome do experimento" é a única fonte dele.
+  const [nomeFaltando, setNomeFaltando] = useState(false);
+  const pedirNome = () => {
+    setNomeFaltando(true); setStep(1);
+    flash("Dê um nome ao experimento antes de salvar", 4000);
+    setTimeout(() => document.getElementById("campo-nome-experimento")?.focus(), 50);
+  };
+  const persist = async (nomeInformado) => {
+    if (!currentUser) return null;
+    const t = (nomeInformado ?? meta.nome ?? "").toString().trim().slice(0, 120);
+    if (!t) { pedirNome(); return null; }
+    if (t !== meta.nome) setMeta(m => ({ ...m, nome: t }));
     setBusy(true);
     try {
-      const t = (title || currentExp?.title || meta.nome || "Sem título").toString().trim().slice(0, 120) || "Sem título";
-      const id = await cloud.saveExperiment({ id: currentExp?.id, title: t, modo: categoriaAtiva, kind: "protocolo", responsavel: meta.responsavel || "", data: meta.data || "", resumoModo: resumoModoFases(categoriaAtiva, meta), bundle: bundle() });
+      const b = bundle();
+      const id = await cloud.saveExperiment({ id: currentExp?.id, title: t, modo: categoriaAtiva, kind: "protocolo", responsavel: meta.responsavel || "", data: meta.data || "", resumoModo: resumoModoFases(categoriaAtiva, meta), bundle: { ...b, meta: { ...b.meta, nome: t } } });
       setCurrentExp(prev => ({ id, title: t, ownerId: prev?.ownerId || currentUser.uid, ownerName: prev?.ownerName || currentUser.name, editors: prev?.editors || [], folhaPdf: prev?.id === id ? prev.folhaPdf : undefined }));
       flash("Salvo na nuvem");
       return { id, title: t };
     } catch { flash("Não foi possível salvar (sem permissão?)"); return null; }
     finally { setBusy(false); setShowSaveDlg(false); setSaveTitle(""); }
   };
-  const onSaveClick = () => { if (currentExp?.id && canEditCurrent) persist(); else setShowSaveDlg(true); };
+  const onSaveClick = () => { if ((meta.nome || "").trim()) persist(); else { setSaveTitle(""); setShowSaveDlg(true); } };
 
   const openExperiment = async (summary) => {
     setBusy(true);
     try {
       const full = await cloud.getExperiment(summary.id);
-      if (full?.bundle) applyBundle(full.bundle);
+      if (full?.bundle) applyBundle({ ...full.bundle, meta: { ...full.bundle.meta, nome: full.bundle.meta?.nome || (full.title !== "Sem título" ? full.title : "") || "" } });
       setCurrentExp({ id: full.id, title: full.title, ownerId: full.ownerId, ownerName: full.ownerName, editors: full.editors || [], folhaPdf: full.folhaPdf });
       setStep(1); flash(`"${full.title}" aberto${cloud.canEdit({ ownerId: full.ownerId, editors: full.editors }, currentUser?.uid, isAdmin) ? "" : " (somente leitura)"}`);
     } catch { flash("Erro ao abrir o experimento"); }
@@ -274,146 +284,65 @@ export default function App() {
     download("planilha_de_campo.csv", toCSV(rowsForCSV, cols));
   };
 
-  // ── Relatório (PDF) ──
-  // Folha de campo: mesma seleção da etapa Experimento, em formato pra imprimir e preencher à mão.
-  // Item já preenchido no app sai impresso com o valor; vazio sai como caixa/linha em branco —
-  // então imprimir antes do ensaio dá uma folha em branco, e depois, um registro preenchido.
-  const buildReportHTML = () => {
+  // ── Folha de campo (PDF) ──
+  // Dados do registro do ensaio, na mesma ordem de blocos sugerida para o campo.
+  // O PDF em si é montado em lib/folhaPdf.js.
+  const dadosFolha = () => {
     const ordemIds = (ORDEM_SUGERIDA[categoriaAtiva] || []).map(o => o.bloco).filter(id => blocosComSelecao.some(b => b.id === id));
     const restantes = blocosComSelecao.map(b => b.id).filter(id => !ordemIds.includes(id));
-    const ordem = (ORDEM_SUGERIDA[categoriaAtiva] || []).filter(o => blocosComSelecao.some(b => b.id === o.bloco))
-      .map(o => { const b = blocos.find(x => x.id === o.bloco); return `<li><b>${esc(b?.titulo || o.bloco)}</b> — ${esc(o.nota)}</li>`; }).join("");
-
-    // Cada tipo de resposta ganha um campo proporcional ao que cabe escrever à mão:
-    // valor → linha sublinhada + unidade; texto → moldura pautada; opções → ☐/☑ + linha de Obs.
-    // Se um tipo acabar sem opções cadastradas, cai na moldura de texto — nenhum item fica sem campo.
-    const linhaChecklist = (item) => {
+    const resultado = (item) => {
       const v = sessaoValores[item.id] || {};
       const r = respostaDe(item);
-      if (r === "valor" || r === "hora" || r === "data") {
-        return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-line">${v.valor ? esc(v.valor) : ""}</span>${item.unidade ? `<span class="fs-unidade">${esc(item.unidade)}</span>` : ""}</div><div class="fs-obs fs-obs-curta">Obs.: <span class="fs-line-obs fs-line-obs-curta"></span></div>`;
+      if (["valor", "texto", "hora", "data"].includes(r)) {
+        const val = (v.valor || "").trim();
+        if (!val) return { valor: "", estado: "vazio" };
+        return { valor: r === "valor" && item.unidade ? `${val} ${item.unidade}` : val, estado: "neutro" };
       }
-      const opcoes = opcoesDe(item);
-      if (r === "texto" || !opcoes.length) {
-        return `<div class="fs-texto"><div class="fs-texto-label">${esc(item.titulo)}</div><div class="fs-moldura">${v.valor ? esc(v.valor).replace(/\n/g, "<br>") : ""}</div></div>`;
-      }
-      const opcoesHTML = opcoes.map(op => `<span class="fs-check">${v.resultado === op ? "☑" : "☐"} ${esc(op)}</span>`).join("");
-      return `<div class="fs-item"><span class="fs-label">${esc(item.titulo)}</span><span class="fs-opcoes">${opcoesHTML}</span></div><div class="fs-obs">Obs.: <span class="fs-line-obs"></span></div>`;
+      if (!v.resultado) return { valor: "", estado: "vazio" };
+      const estado = ["Falhou", "Não", "Refazer"].includes(v.resultado) ? "falha" : ["Passou", "OK", "Sim", "Feito"].includes(v.resultado) ? "ok" : "neutro";
+      return { valor: v.resultado, estado };
     };
-    const gruposHTML = [...ordemIds, ...restantes].map(id => {
+    const checklist = [...ordemIds, ...restantes].map(id => {
       const b = blocosComSelecao.find(x => x.id === id);
-      const itensSessao = selectedFlat.filter(i => i.blocoId === id && i.escopo === "sessao");
-      if (!b || !itensSessao.length) return "";
-      return `<div class="fs-grupo"><h3>${esc(b.titulo)}${b.fonte ? ` <span class="fs-fonte">· ${esc(b.fonte)}</span>` : ""}</h3>${itensSessao.map(linhaChecklist).join("")}</div>`;
-    }).join("");
-
-    const medidas = selectedFlat.filter(i => respostaDe(i) === "valor").length;
-    const resumoHTML = `<p class="fs-resumo">${sessaoVerificados}/${sessaoItems.length} verificados${sessaoFalhas ? ` · ${sessaoFalhas} ${sessaoFalhas === 1 ? "falhou" : "falharam"}` : ""} · ${medidas} ${medidas === 1 ? "medida" : "medidas"} · ${ensaioRows.length} ${ensaioRows.length === 1 ? "ensaio" : "ensaios"}</p>`;
-
-    // Teste de vácuo: entra na folha impressa como registro assinável do
-    // pré-check de estanqueidade, com as duas leituras e o ΔP calculado.
+      const itens = selectedFlat.filter(i => i.blocoId === id && i.escopo === "sessao");
+      return b && itens.length ? { titulo: b.titulo, fonte: b.fonte || "", itens: itens.map(i => ({ titulo: i.titulo, ...resultado(i) })) } : null;
+    }).filter(Boolean);
     const vacuoStatus = statusEstanqueidade(testeVacuo);
-    const vacuoDelta = quedaPressao(testeVacuo);
-    const vacuoHTML = exigeTesteVacuo(categoriaAtiva) ? `<h2>Teste de vácuo da cápsula</h2>
-<table class="meta">
-<tr><td>Executado</td><td>${testeVacuo.realizado ? "Sim" : "Não"}</td></tr>
-<tr><td>Pressão inicial</td><td>${testeVacuo.pressaoInicial !== "" ? `${esc(testeVacuo.pressaoInicial)} ${UNIDADE_PRESSAO}` : "____________"}</td></tr>
-<tr><td>Pressão final (${esc(testeVacuo.tempoDecorridoMinutos)} min)</td><td>${testeVacuo.pressaoFinal !== "" ? `${esc(testeVacuo.pressaoFinal)} ${UNIDADE_PRESSAO}` : "____________"}</td></tr>
-<tr><td>Queda (ΔP)</td><td><b>${vacuoDelta === null ? "____________" : `${vacuoDelta.toFixed(1)} ${UNIDADE_PRESSAO}`}</b> · tolerância ${esc(num(testeVacuo.limiteQueda))} ${UNIDADE_PRESSAO}</td></tr>
-<tr><td>Estanqueidade</td><td><b>${esc(ROTULO_STATUS[vacuoStatus])}</b></td></tr>
-${testeVacuo.observacoes ? `<tr><td>Observações</td><td>${esc(testeVacuo.observacoes)}</td></tr>` : ""}
-</table>` : "";
-
-    const TARGET_ROWS = 10;
-    const linhasExtra = Math.max(0, TARGET_ROWS - ensaioRows.length);
-    const obsEnsaiosHTML = ensaioRows.length ? ensaioRows.map((r, idx) => `<div class="fs-texto"><div class="fs-texto-label">Ensaio #${idx + 1} — O que foi feito</div><div class="fs-moldura">${r._obs ? esc(r._obs).replace(/\n/g, "<br>") : ""}</div></div>`).join("") : "";
-    // Muitas colunas não cabem legíveis em retrato — a planilha vira paisagem sozinha nesse caso.
-    const paisagem = ensaioItems.length > 4;
-    const planilhaHTML = ensaioItems.length ? `<div class="fs-planilha-wrap${paisagem ? " fs-paisagem" : ""}"><h2>Planilha de campo</h2><table class="fs-tabela"><tr><th>#</th>${ensaioItems.map(i => `<th>${esc(i.titulo)}${i.unidade ? ` (${esc(i.unidade)})` : ""}</th>`).join("")}</tr>${[
-      ...ensaioRows.map((r, idx) => `<tr><td>${idx + 1}</td>${ensaioItems.map(i => `<td>${esc(r[i.id] ?? "")}</td>`).join("")}</tr>`),
-      ...Array.from({ length: linhasExtra }).map((_, k) => `<tr><td>${ensaioRows.length + k + 1}</td>${ensaioItems.map(() => `<td></td>`).join("")}</tr>`),
-    ].join("")}</table>${obsEnsaiosHTML}</div>` : "";
-
-    const nomeMontou = currentExp?.ownerName || currentUser?.name || "";
-    const assinaturasHTML = `<div class="fs-assinaturas"><h2>Assinaturas</h2>
-<div class="fs-assin-bloco"><div class="fs-assin-titulo">Responsável por montar este checklist</div><div class="fs-assin-linha">
-<div class="fs-assin-campo"><div class="lbl">Nome</div><div class="val">${esc(nomeMontou)}</div></div>
-<div class="fs-assin-campo"><div class="lbl">Assinatura</div><div class="val">&nbsp;</div></div>
-</div></div>
-<div class="fs-assin-bloco"><div class="fs-assin-titulo">Responsável por preencher este checklist</div><div class="fs-assin-linha">
-<div class="fs-assin-campo"><div class="lbl">Nome</div><div class="val">${esc(meta.responsavel || "")}</div></div>
-<div class="fs-assin-campo"><div class="lbl">Assinatura</div><div class="val">&nbsp;</div></div>
-</div></div>
-<div class="fs-assin-linha">
-<div class="fs-assin-campo" style="flex:0 0 220px"><div class="lbl">Data</div><div class="val">____ / ____ / ________</div></div>
-${meta.local ? "" : `<div class="fs-assin-campo"><div class="lbl">Local</div><div class="val">&nbsp;</div></div>`}
-</div></div>`;
-
-    return `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Folha de Campo — Hydrone</title><style>
-@page{size:A4;margin:14mm}
-@page paisagem{size:A4 landscape;margin:10mm}
-body{font-family:Arial,sans-serif;color:#1e293b;max-width:760px;margin:24px auto;padding:0 24px}
-h1{font-size:20px;color:#1e40af;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px}
-.sub{font-size:12px;color:#64748b;margin:0 0 10px}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#1e40af;margin:20px 0 6px;page-break-after:avoid;break-after:avoid}
-table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0}
-td,th{text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0}
-.meta td:first-child{color:#64748b;width:160px}
-p{font-size:13px;line-height:1.5;margin:4px 0}
-.foot{font-size:11px;color:#94a3b8;margin-top:24px;border-top:1px solid #e2e8f0;padding-top:8px}
-.cat-badge{display:inline-block;font-size:11px;font-weight:700;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:2px 8px;margin:2px 4px 14px 0}
-.fs-resumo{font-size:12px;font-weight:700;color:#1e293b;background:#f1f5f9;border-radius:6px;padding:6px 10px;margin:0 0 10px;display:inline-block}
-.fs-grupo{margin:12px 0;page-break-inside:avoid;break-inside:avoid}
-.fs-grupo h3{font-size:12px;color:#1e40af;margin:0 0 4px;border-bottom:1px solid #dbeafe;padding-bottom:2px}
-.fs-fonte{font-weight:400;color:#94a3b8;font-size:10px}
-.fs-item{display:flex;align-items:baseline;gap:10px;font-size:12px;padding:4px 0 2px}
-.fs-label{flex:1}
-.fs-line{flex:0 0 40mm;border-bottom:1px solid #94a3b8;min-height:14px}
-.fs-unidade{color:#64748b;font-size:11px}
-.fs-opcoes{font-size:11px;color:#334155;white-space:nowrap}
-.fs-check{margin-left:10px}
-.fs-obs{font-size:11px;color:#64748b;display:flex;align-items:flex-end;gap:6px;padding:0 0 8px;margin-bottom:6px;border-bottom:1px dotted #e2e8f0}
-.fs-line-obs{flex:1;border-bottom:1px solid #94a3b8;height:10mm}
-.fs-obs-curta{padding-bottom:4px}
-.fs-line-obs-curta{height:6mm;flex:0 0 60%}
-.fs-texto{margin:4px 0 10px;page-break-inside:avoid;break-inside:avoid}
-.fs-texto-label{font-size:12px;font-weight:600;margin-bottom:3px}
-.fs-moldura{border:1px solid #94a3b8;border-radius:4px;padding:8px 8px 4px;min-height:24mm;font-size:12px;line-height:7mm;white-space:pre-wrap;background-image:repeating-linear-gradient(to bottom,transparent,transparent calc(7mm - 1px),#dbeafe calc(7mm - 1px),#dbeafe 7mm);background-position:0 7mm}
-.fs-planilha-wrap{margin-top:10px}
-.fs-paisagem{page:paisagem;page-break-before:always;break-before:page}
-.fs-tabela{border-collapse:collapse;table-layout:auto}
-.fs-tabela th,.fs-tabela td{border:1px solid #333;padding:4px 6px}
-.fs-tabela th{font-size:9.5px;font-weight:700;color:#1e293b;background:#f1f5f9;white-space:normal;line-height:1.25;vertical-align:bottom}
-.fs-tabela td{height:10mm;font-size:11px;vertical-align:top}
-.fs-tabela th:first-child,.fs-tabela td:first-child{width:8mm;text-align:center}
-.fs-tabela{page-break-inside:auto}
-.fs-tabela tr{page-break-inside:avoid;break-inside:avoid}
-.fs-assinaturas{margin-top:28px;padding-top:14px;border-top:2px solid #1d4ed8;page-break-inside:avoid;break-inside:avoid}
-.fs-assin-bloco{margin:14px 0;page-break-inside:avoid;break-inside:avoid}
-.fs-assin-titulo{font-size:12px;font-weight:700;color:#1e293b;margin-bottom:10px}
-.fs-assin-linha{display:flex;gap:24px;flex-wrap:wrap}
-.fs-assin-campo{flex:1;min-width:160px}
-.fs-assin-campo .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:#64748b;font-weight:700;margin-bottom:14px}
-.fs-assin-campo .val{border-bottom:1px solid #94a3b8;min-height:16px;padding:2px 2px 4px;font-size:13px}
-@media print{body{margin:0}}
-</style></head><body>
-<div style="display:flex;align-items:center;gap:10px;border-bottom:2px solid #1d4ed8;padding-bottom:6px;margin-bottom:2px"><img src="/hydrone-mark.png" alt="Hydrone" style="height:34px;width:34px"><h1 style="border:0;margin:0;padding:0">Folha de Campo</h1></div><p class="sub">${esc(meta.nome || "Sem nome")} · Planejador de Experimentos Hydrone</p><span class="cat-badge">${esc(categoriaMeta(categoriaAtiva).label)}</span><span class="cat-badge">${esc(resumoModoFases(categoriaAtiva, meta))}</span>
-${meta.descricao ? `<h2>Descrição</h2><p>${esc(meta.descricao)}</p>` : ""}
-<table class="meta"><tr><td>Responsável</td><td>${esc(meta.responsavel || currentUser?.name || "")}</td></tr><tr><td>Data</td><td>${esc(meta.data)}</td></tr>${meta.equipamento ? `<tr><td>Equipamento</td><td>${esc(meta.equipamento)}</td></tr>` : ""}${meta.local ? `<tr><td>Local</td><td>${esc(meta.local)}</td></tr>` : ""}<tr><td>Ensaio nº</td><td class="fs-line" style="display:inline-block;width:140px"></td></tr></table>
-${resumoHTML}
-${vacuoHTML}
-${ordem ? `<h2>Sugestão de ordem em campo</h2><ol style="font-size:13px;padding-left:18px">${ordem}</ol>` : ""}
-<h2>Checklist</h2>${gruposHTML || "<p>Nenhum requisito marcado.</p>"}
-${planilhaHTML}
-${meta.notas ? `<h2>Observações</h2><p>${esc(meta.notas)}</p>` : ""}
-${assinaturasHTML}
-<p class="foot">Gerado em ${esc(new Date().toLocaleString("pt-BR"))}</p></body></html>`;
+    const vacuoQueda = quedaPressao(testeVacuo);
+    const comUnidade = (x) => (x !== "" && x != null ? `${x} ${UNIDADE_PRESSAO}` : "");
+    return {
+      titulo: (meta.nome || "").trim() || "Sem nome",
+      categoria: categoriaMeta(categoriaAtiva).label,
+      modo: resumoModoFases(categoriaAtiva, meta),
+      descricao: meta.descricao, responsavel: meta.responsavel || currentUser?.name || "", data: meta.data,
+      local: meta.local, equipamento: meta.equipamento, notas: meta.notas,
+      resumo: { verificados: sessaoVerificados, total: sessaoItems.length, falhas: sessaoFalhas, medidas: selectedFlat.filter(i => respostaDe(i) === "valor").length, ensaios: ensaioRows.length },
+      vacuo: exigeTesteVacuo(categoriaAtiva) ? {
+        realizado: !!testeVacuo.realizado,
+        inicial: comUnidade(testeVacuo.pressaoInicial), final: comUnidade(testeVacuo.pressaoFinal),
+        minutos: testeVacuo.tempoDecorridoMinutos,
+        queda: vacuoQueda === null ? "" : `${vacuoQueda.toFixed(1)} ${UNIDADE_PRESSAO}`,
+        limite: comUnidade(num(testeVacuo.limiteQueda)),
+        status: ROTULO_STATUS[vacuoStatus], statusId: vacuoStatus, obs: testeVacuo.observacoes || "",
+      } : null,
+      checklist,
+      planilha: ensaioItems.length ? {
+        colunas: ensaioItems.map(i => `${i.titulo}${i.unidade ? ` (${i.unidade})` : ""}`),
+        linhas: ensaioRows
+          .map(r => ({ valores: ensaioItems.map(i => String(r[i.id] ?? "")), obs: r._obs || "" }))
+          .filter(l => l.obs.trim() || l.valores.some(v => v.trim())),
+      } : null,
+      assinaturas: { montou: currentExp?.ownerName || currentUser?.name || "", preencheu: meta.responsavel || "" },
+      geradoEm: new Date().toLocaleString("pt-BR"),
+    };
   };
-  const printReport = () => {
-    const html = buildReportHTML();
-    try { const w = window.open("", "_blank"); if (w) { w.document.write(html); w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch {} }, 400); return; } } catch {}
-    try { const f = document.createElement("iframe"); f.style.cssText = "position:fixed;width:0;height:0;border:0;right:0;bottom:0;"; document.body.appendChild(f); const d = f.contentWindow.document; d.open(); d.write(html); d.close(); setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch {} setTimeout(() => f.remove(), 800); }, 400); return; } catch {}
-    download("protocolo_de_ensaio.html", html, "text/html");
+  const baixarFolhaPdf = async () => {
+    flash("Gerando a folha de campo em PDF…", 60000);
+    try {
+      const pdf = await gerarPdfFolha(dadosFolha());
+      download(`Folha_de_Campo - ${(meta.nome || "Sem nome").trim()}.pdf`, pdf, "application/pdf");
+      flash("Folha de campo baixada");
+    } catch { flash("Não foi possível gerar o PDF"); }
   };
 
   const userChip = (<span className="flex items-center gap-1.5 bg-white/15 rounded-full pl-1 pr-3 py-1">{currentUser?.photoURL ? <img src={currentUser.photoURL} alt="" className="w-5 h-5 rounded-full" referrerPolicy="no-referrer" /> : <User size={14} />}<span className="max-w-[8rem] truncate">{currentUser?.name}</span>{isAdmin && <span className="text-[9px] font-bold bg-amber-400 text-blue-950 rounded px-1 leading-tight">ADMIN</span>}</span>);
@@ -508,8 +437,9 @@ ${assinaturasHTML}
 
           <section className="bg-white rounded-xl border border-slate-200 p-4">
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Waves size={15} className="text-blue-700" /> Sobre o experimento</h2>
-            <label className="text-xs text-slate-500 font-medium">Nome do experimento</label>
-            <input value={meta.nome} onChange={e => setMeta({ ...meta, nome: e.target.value })} placeholder="ex.: Resposta do casco ao pouso — série 1" className="w-full mt-1 mb-3 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400" />
+            <label htmlFor="campo-nome-experimento" className="text-xs text-slate-500 font-medium">Nome do experimento <span className="text-rose-600">*</span></label>
+            <input id="campo-nome-experimento" value={meta.nome} onChange={e => { setMeta({ ...meta, nome: e.target.value }); if (e.target.value.trim()) setNomeFaltando(false); }} placeholder="ex.: Resposta do casco ao pouso — série 1" className={`w-full mt-1 px-2 py-1.5 text-sm border rounded outline-none focus:border-blue-400 ${nomeFaltando && !meta.nome.trim() ? "border-rose-400 bg-rose-50/40" : "border-slate-200"}`} />
+            <p className={`text-xs mt-1 mb-3 ${nomeFaltando && !meta.nome.trim() ? "text-rose-600" : "text-slate-400"}`}>Obrigatório para salvar. Também é o nome da pasta do experimento no Google Drive.</p>
             <label className="text-xs text-slate-500 font-medium">O que você vai fazer e por quê</label>
             <textarea value={meta.descricao} onChange={e => setMeta({ ...meta, descricao: e.target.value })} placeholder="ex.: Medir como o casco reage ao pousar na água em diferentes velocidades verticais, para caracterizar o impacto do pouso." className="w-full mt-1 mb-3 px-2 py-1.5 text-sm border border-slate-200 rounded outline-none focus:border-blue-400 h-20" />
             <div className="grid sm:grid-cols-2 gap-3">
@@ -667,14 +597,14 @@ ${assinaturasHTML}
 
           <Finalizar
             expId={currentExp?.id} readOnly={readOnly}
-            nomeExperimento={(currentExp?.title || meta.nome || "Sem título").toString().trim().slice(0, 120) || "Sem título"}
+            nomeExperimento={(meta.nome || "").trim().slice(0, 120)}
             dataIso={meta.data} folhaPdf={currentExp?.folhaPdf}
             resumo={{ verificados: sessaoVerificados, totalChecklist: sessaoItems.length, falhas: sessaoFalhas, ensaios: ensaioRows.length }}
             pendentes={pendentes} setPendentes={setPendentes}
             onSalvarExperimento={() => persist()}
-            gerarHtmlFolha={buildReportHTML}
+            gerarDadosFolha={dadosFolha}
             onFolhaSalva={(folhaPdf) => setCurrentExp(prev => (prev ? { ...prev, folhaPdf } : prev))}
-            onBaixarPdf={() => setShowReport(true)}
+            onBaixarPdf={baixarFolhaPdf}
             onBaixarCsv={ensaioRows.length ? exportPlanilha : null}
             onExportarJson={exportJSON} onImportarJson={importJSON} />
 
@@ -759,33 +689,7 @@ ${assinaturasHTML}
             </li>); })}</ul>); })()}
       </div></div>)}
 
-      {showSaveDlg && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaveDlg(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}><h3 className="font-bold text-slate-800 mb-1">Salvar experimento</h3><p className="text-xs text-slate-500 mb-3">Dê um nome para salvar na nuvem do time.</p><input value={saveTitle} onChange={e => setSaveTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && persist(saveTitle)} placeholder="Nome do experimento" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" autoFocus /><div className="flex gap-2 mt-4"><button onClick={() => setShowSaveDlg(false)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={() => persist(saveTitle)} disabled={busy} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold">Salvar</button></div></div></div>)}
-
-      {showReport && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowReport(false)}><div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[88vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="p-6 text-slate-800">
-        <div className="flex items-center gap-2 border-b-2 border-blue-700 pb-2 mb-4"><img src="/hydrone-mark.png" alt="Hydrone" className="h-6 w-6 shrink-0" /><div><h2 className="text-lg font-bold">Folha de Campo</h2><p className="text-xs text-slate-500">{meta.nome || "Sem nome"} · Hydrone</p></div></div>
-        <span className="inline-block text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 mb-3 mr-1.5">{categoriaMeta(categoriaAtiva).label}</span>
-        <span className="inline-block text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 mb-3">{resumoModoFases(categoriaAtiva, meta)}</span>
-        {meta.descricao && <><h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Descrição</h3><p className="text-sm mb-3">{meta.descricao}</p></>}
-        <table className="w-full text-sm mb-3"><tbody><tr><td className="py-1 pr-3 text-slate-500 w-36">Responsável</td><td className="py-1 font-medium">{meta.responsavel || currentUser.name}</td></tr><tr><td className="py-1 pr-3 text-slate-500">Data</td><td className="py-1 font-medium">{meta.data}</td></tr>{meta.equipamento && <tr><td className="py-1 pr-3 text-slate-500">Equipamento</td><td className="py-1 font-medium">{meta.equipamento}</td></tr>}{meta.local && <tr><td className="py-1 pr-3 text-slate-500">Local</td><td className="py-1 font-medium">{meta.local}</td></tr>}</tbody></table>
-        {exigeTesteVacuo(categoriaAtiva) && (<>
-          <h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Teste de vácuo da cápsula</h3>
-          <p className="text-sm mb-3">
-            {quedaPressao(testeVacuo) === null
-              ? "Leituras não preenchidas."
-              : <>ΔP = <b>{quedaPressao(testeVacuo).toFixed(1)} {UNIDADE_PRESSAO}</b> em {testeVacuo.tempoDecorridoMinutos} min · tolerância {num(testeVacuo.limiteQueda)} {UNIDADE_PRESSAO} · </>}
-            <b className={statusEstanqueidade(testeVacuo) === "reprovado" ? "text-rose-700" : statusEstanqueidade(testeVacuo) === "aprovado" ? "text-emerald-700" : "text-slate-500"}>
-              {ROTULO_STATUS[statusEstanqueidade(testeVacuo)]}
-            </b>
-          </p>
-        </>)}
-        <h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1">Requisitos marcados</h3>
-        {blocosComSelecao.length === 0 ? <p className="text-sm text-slate-500">Nenhum requisito marcado.</p> : blocosComSelecao.map(b => (<div key={b.id} className="mb-3">
-          <h4 className="font-semibold text-sm text-slate-700 mt-2">{b.titulo}{b.fonte && <span className="text-slate-400 font-normal text-xs"> · {b.fonte}</span>}</h4>
-          <ul className="text-sm mt-1 space-y-1">{selectedFlat.filter(i => i.blocoId === b.id).map(i => <li key={i.id}><b>{i.titulo}</b> — {i.simples}</li>)}</ul>
-        </div>))}
-        {meta.notas && <><h3 className="font-bold text-blue-800 text-sm uppercase tracking-wide mb-1 mt-3">Observações</h3><p className="text-sm">{meta.notas}</p></>}
-        <p className="text-xs text-slate-400 mt-4 pt-2 border-t border-slate-200">Gerado em {new Date().toLocaleString("pt-BR")}</p>
-      </div><div className="sticky bottom-0 bg-white border-t border-slate-200 p-3 flex gap-2 justify-end"><button onClick={() => setShowReport(false)} className="text-sm px-4 py-2 rounded-lg border border-slate-200 text-slate-600">Fechar</button><button onClick={printReport} className="text-sm px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white font-semibold flex items-center gap-1.5"><FileText size={15} /> Imprimir / Salvar PDF</button></div></div></div>)}
+      {showSaveDlg && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setShowSaveDlg(false)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}><h3 className="font-bold text-slate-800 mb-1">Salvar experimento</h3><p className="text-xs text-slate-500 mb-3">O nome é obrigatório: identifica o experimento na lista do time e vira o nome da pasta dele no Google Drive.</p><input autoFocus value={saveTitle} onChange={e => setSaveTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && saveTitle.trim() && persist(saveTitle)} placeholder="Nome do experimento" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-400" autoFocus /><div className="flex gap-2 mt-4"><button onClick={() => setShowSaveDlg(false)} className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button><button onClick={() => persist(saveTitle)} disabled={busy || !saveTitle.trim()} className="flex-1 text-sm py-2 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold">Salvar</button></div></div></div>)}
 
       {toast && <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-sm px-4 py-2 rounded-lg shadow-lg z-50">{toast}</div>}
     </div>

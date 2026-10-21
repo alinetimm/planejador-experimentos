@@ -16,7 +16,8 @@ const tamanho = (b) => {
 
 export const chaveArquivo = (f) => `${f.name}-${f.size}-${f.lastModified}`;
 
-const nomeDoPdf = (titulo) => `Folha_de_Campo - ${titulo || "Sem título"}.pdf`;
+// Cada experimento tem a própria pasta, então o nome do PDF não precisa distinguir nada.
+const NOME_PDF = "Folha_de_Campo.pdf";
 
 function Miniatura({ arquivo, att, iconePadrao: IconePadrao }) {
   const [falhou, setFalhou] = useState(false);
@@ -103,8 +104,8 @@ const ICONE_ETAPA = {
 
 /**
  * Etapa 3 — fechamento do ensaio. Fotos/vídeos e logs são escolhidos aqui e só
- * sobem no envio final, junto com a folha de campo em PDF, para a pasta do dia:
- * Hydrone / DD-MM-AAAA / (PDF, Fotos/, Logs/).
+ * sobem no envio final, junto com a folha de campo em PDF, para a pasta do
+ * experimento: Hydrone / DD-MM-AAAA / {nome do experimento} / (PDF, Fotos/, Logs/).
  *
  * Os arquivos escolhidos ficam no estado do App (`pendentes`), não aqui, para não
  * se perderem quando a pessoa volta à Etapa 2 e retorna.
@@ -112,14 +113,14 @@ const ICONE_ETAPA = {
 export default function Finalizar({
   expId, readOnly, nomeExperimento, dataIso, folhaPdf, resumo,
   pendentes, setPendentes,
-  onSalvarExperimento, gerarHtmlFolha, onFolhaSalva,
+  onSalvarExperimento, gerarDadosFolha, onFolhaSalva,
   onBaixarPdf, onBaixarCsv, onExportarJson, onImportarJson,
 }) {
   const [enviados, setEnviados] = useState([]);
   const [etapas, setEtapas] = useState(null);
   const [progresso, setProgresso] = useState({});
   const [enviando, setEnviando] = useState(false);
-  const [pastaDia, setPastaDia] = useState(null);   // { id, nome } do último envio nesta tela
+  const [pastaEnviada, setPastaEnviada] = useState(null);   // { id, nome } da pasta do experimento no último envio
   const [erro, setErro] = useState("");
   const [aviso, setAviso] = useState("");
 
@@ -131,7 +132,7 @@ export default function Finalizar({
   const enviadosPor = (g) => enviados.filter(a => cloud.grupoDoAnexo(a) === g);
   const fotosEnviadas = enviadosPor("fotos");
   const logsEnviados = enviadosPor("logs");
-  const podeEnviar = cloud.podeUsarDrive() && !readOnly;
+  const podeEnviar = cloud.podeUsarDrive() && !readOnly && !!nomeExperimento;
   const nomeData = cloud.nomePastaData(dataIso);
 
   const adicionar = (grupo) => (files) => setPendentes(p => {
@@ -152,7 +153,7 @@ export default function Finalizar({
   const marcar = (id, mudancas) => setEtapas(es => es.map(e => (e.id === id ? { ...e, ...mudancas } : e)));
 
   const enviarTudo = async () => {
-    setErro(""); setAviso(""); setPastaDia(null);
+    setErro(""); setAviso(""); setPastaEnviada(null);
     const fotos = [...pendentes.fotos];
     const logs = [...pendentes.logs];
     setEtapas([
@@ -176,16 +177,16 @@ export default function Finalizar({
       marcar("salvar", { estado: "ok" });
 
       etapaAtual = "pastas"; marcar("pastas", { estado: "andamento" });
-      const pastas = await cloud.pastasDoEnvio(dataIso);
-      setPastaDia({ id: pastas.dataId, nome: pastas.nomeData });
-      marcar("pastas", { estado: "ok", rotulo: `Pastas prontas: ${pastas.nomeData} / Fotos, Logs` });
+      const pastas = await cloud.pastasDoEnvio(dataIso, salvo.title, salvo.id);
+      setPastaEnviada({ id: pastas.experimentoId, nome: salvo.title });
+      marcar("pastas", { estado: "ok", rotulo: `Pastas prontas: ${pastas.nomeData} / ${salvo.title} / Fotos, Logs` });
 
       // Daqui em diante uma falha não interrompe o resto: cada parte é independente.
       let falhas = 0;
       etapaAtual = "pdf"; marcar("pdf", { estado: "andamento", rotulo: "Gerando e enviando o PDF da folha de campo" });
       try {
-        const pdf = await gerarPdfFolha(gerarHtmlFolha());
-        const salva = await cloud.salvarFolhaNoDrive(salvo.id, pdf, nomeDoPdf(salvo.title), pastas.dataId);
+        const pdf = await gerarPdfFolha(gerarDadosFolha());
+        const salva = await cloud.salvarFolhaNoDrive(salvo.id, pdf, NOME_PDF, pastas.experimentoId);
         onFolhaSalva?.(salva);
         marcar("pdf", { estado: "ok", rotulo: "PDF da folha de campo enviado" });
       } catch (e) {
@@ -231,7 +232,7 @@ export default function Finalizar({
     }
   };
 
-  const pastaLink = pastaDia?.id || folhaPdf?.pastaId;
+  const pastaLink = pastaEnviada?.id || folhaPdf?.pastaId;
   const totalFotos = pendentes.fotos.length + fotosEnviadas.length;
   const totalLogs = pendentes.logs.length + logsEnviados.length;
 
@@ -278,19 +279,25 @@ export default function Finalizar({
         <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5"><CloudUpload size={15} className="text-blue-700" /> Envio para o Google Drive</h2>
         <div className="text-sm bg-slate-50 rounded-lg p-3 mb-4 font-mono leading-7 overflow-x-auto">
           <div className="flex items-center gap-1.5 whitespace-nowrap"><Folder size={15} className="text-blue-700 shrink-0" /> Hydrone</div>
-          <div className="flex items-center gap-1.5 whitespace-nowrap pl-5"><FolderOpen size={15} className="text-blue-700 shrink-0" /> {nomeData}</div>
-          <div className="flex items-center gap-1.5 whitespace-nowrap pl-10"><FileText size={15} className="text-slate-500 shrink-0" /> {nomeDoPdf(nomeExperimento)}</div>
-          <div className="flex items-center gap-1.5 whitespace-nowrap pl-10"><Folder size={15} className="text-slate-500 shrink-0" /> Fotos <span className="text-slate-400 font-sans text-xs">({totalFotos})</span></div>
-          <div className="flex items-center gap-1.5 whitespace-nowrap pl-10"><Folder size={15} className="text-slate-500 shrink-0" /> Logs <span className="text-slate-400 font-sans text-xs">({totalLogs})</span></div>
+          <div className="flex items-center gap-1.5 whitespace-nowrap pl-5"><Folder size={15} className="text-blue-700 shrink-0" /> {nomeData}</div>
+          <div className="flex items-center gap-1.5 whitespace-nowrap pl-10"><FolderOpen size={15} className="text-blue-700 shrink-0" /> {nomeExperimento || <span className="text-rose-600 font-sans">(sem nome — obrigatório)</span>}</div>
+          <div className="flex items-center gap-1.5 whitespace-nowrap pl-15"><FileText size={15} className="text-slate-500 shrink-0" /> {NOME_PDF}</div>
+          <div className="flex items-center gap-1.5 whitespace-nowrap pl-15"><Folder size={15} className="text-slate-500 shrink-0" /> Fotos <span className="text-slate-400 font-sans text-xs">({totalFotos})</span></div>
+          <div className="flex items-center gap-1.5 whitespace-nowrap pl-15"><Folder size={15} className="text-slate-500 shrink-0" /> Logs <span className="text-slate-400 font-sans text-xs">({totalLogs})</span></div>
         </div>
         <p className="text-xs text-slate-500 mb-3">
-          A pasta do dia vem da data do ensaio. Enviar de novo atualiza a folha de campo (o Drive guarda as versões anteriores) e sobe só os arquivos novos.
+          A pasta do dia vem da data do ensaio, e cada experimento tem a própria pasta dentro dela. Enviar de novo atualiza a folha de campo (o Drive guarda as versões anteriores) e sobe só os arquivos novos.
           Não feche a aba durante o envio: os arquivos saem direto deste navegador.
         </p>
 
         {!cloud.podeUsarDrive() && (
           <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
             Para enviar ao Drive, saia e entre de novo usando <b>Entrar com Google</b> — os arquivos são gravados pela sua conta Google.
+          </p>
+        )}
+        {!nomeExperimento && (
+          <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-3">
+            Dê um nome ao experimento na etapa <b>Sobre</b> antes de enviar — ele vira o nome da pasta do experimento no Drive.
           </p>
         )}
         {readOnly && (
@@ -329,7 +336,7 @@ export default function Finalizar({
         {pastaLink && !enviando && (
           <a href={cloud.linkPastaDrive(pastaLink)} target="_blank" rel="noreferrer"
             className="mt-3 w-full text-sm text-blue-700 hover:text-blue-900 border border-blue-200 hover:bg-blue-50 rounded-xl py-2.5 flex items-center justify-center gap-1.5">
-            <FolderOpen size={15} /> Abrir a pasta {pastaDia?.nome || "do dia"} no Google Drive
+            <FolderOpen size={15} /> Abrir a pasta {pastaEnviada?.nome || nomeExperimento ? `"${pastaEnviada?.nome || nomeExperimento}"` : "do experimento"} no Google Drive
           </a>
         )}
       </section>

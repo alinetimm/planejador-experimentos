@@ -176,9 +176,9 @@ export function canEdit(exp, uid, admin) {
 // checklist via itemId). O navegador envia o arquivo direto para o Google Drive,
 // com o token Google de quem está enviando, nesta árvore:
 //
-//   Hydrone / DD-MM-AAAA / Folha_de_Campo - {experimento}.pdf
-//                        / Fotos / …
-//                        / Logs / …
+//   Hydrone / DD-MM-AAAA / {nome do experimento} / Folha_de_Campo.pdf
+//                                                / Fotos / …
+//                                                / Logs / …
 //
 // Firebase Storage e Cloud Functions ficaram de fora porque exigem o plano Blaze.
 // O doc do anexo só é criado depois que o Drive confirma o arquivo, então não
@@ -278,15 +278,41 @@ export function nomePastaData(dataIso) {
 export const linkPastaDrive = (pastaId) => `https://drive.google.com/drive/folders/${pastaId}`;
 
 /**
- * Pastas de destino de um envio: a do dia na raiz Hydrone e, dentro dela, Fotos
- * e Logs. As duas subpastas são criadas sempre, para todo dia ter a mesma forma.
- * @returns {Promise<{dataId: string, fotosId: string, logsId: string, nomeData: string}>}
+ * Pasta do experimento dentro da pasta do dia. É reconhecida pelo id do
+ * experimento gravado nela (appProperties), não pelo nome: assim um experimento
+ * renomeado continua na mesma pasta, e dois experimentos com o mesmo nome no
+ * mesmo dia não misturam arquivos — o segundo ganha " (2)" no nome.
  */
-export async function pastasDoEnvio(dataIso) {
+async function pastaDoExperimento(dataId, nome, expId) {
+  const daqui = `'${aspasQuery(dataId)}' in parents and mimeType='${TIPO_PASTA}' and trashed=false`;
+  const [minha, irmas] = await Promise.all([
+    driveApi("/files", { params: { q: `${daqui} and appProperties has { key='expId' and value='${aspasQuery(expId)}' }`, fields: "files(id,name)", pageSize: "1", includeItemsFromAllDrives: "true" } }),
+    driveApi("/files", { params: { q: daqui, fields: "files(name)", pageSize: "1000", includeItemsFromAllDrives: "true" } }),
+  ]);
+  const usados = new Set((irmas.files || []).map(f => f.name));
+  const achada = minha.files?.[0];
+  if (achada) {
+    if (achada.name !== nome && !usados.has(nome)) await driveApi(`/files/${achada.id}`, { metodo: "PATCH", corpo: { name: nome } });
+    return achada.id;
+  }
+  let livre = nome;
+  for (let n = 2; usados.has(livre); n++) livre = `${nome} (${n})`;
+  const criada = await driveApi("/files", { metodo: "POST", corpo: { name: livre, mimeType: TIPO_PASTA, parents: [dataId], appProperties: { expId } }, params: { fields: "id" } });
+  return criada.id;
+}
+
+/**
+ * Pastas de destino de um envio: a do dia na raiz Hydrone, a do experimento
+ * dentro dela e, na do experimento, Fotos e Logs. As duas subpastas são criadas
+ * sempre, para todo experimento ter a mesma forma.
+ * @returns {Promise<{dataId, experimentoId, fotosId, logsId, nomeData}>}
+ */
+export async function pastasDoEnvio(dataIso, nomeExperimento, expId) {
   const nomeData = nomePastaData(dataIso);
   const dataId = await findOrCreateFolder(nomeData, PASTA_RAIZ);
-  const [fotosId, logsId] = await Promise.all([findOrCreateFolder("Fotos", dataId), findOrCreateFolder("Logs", dataId)]);
-  return { dataId, fotosId, logsId, nomeData };
+  const experimentoId = await pastaDoExperimento(dataId, nomeExperimento, expId);
+  const [fotosId, logsId] = await Promise.all([findOrCreateFolder("Fotos", experimentoId), findOrCreateFolder("Logs", experimentoId)]);
+  return { dataId, experimentoId, fotosId, logsId, nomeData };
 }
 
 function inferKind(file) {
@@ -426,7 +452,7 @@ export async function deleteAttachment(expId, att) {
 // ──────────────────────── FOLHA DE CAMPO EM PDF ────────────────────────
 
 /**
- * Grava a folha de campo em PDF em `pastaId` (a pasta do dia). Na primeira vez
+ * Grava a folha de campo em PDF em `pastaId` (a pasta do experimento). Na primeira vez
  * cria o arquivo; nas seguintes substitui o conteúdo do MESMO arquivo, então o
  * link não muda e as versões anteriores ficam no histórico de versões do Drive.
  * Exige conectarDrive() antes.
@@ -440,7 +466,7 @@ export async function salvarFolhaNoDrive(expId, pdf, nomeArquivo, pastaId) {
   if (anterior?.fileId) {
     try {
       const params = new URLSearchParams({ uploadType: "media", supportsAllDrives: "true", fields: "id,webViewLink,trashed" });
-      // A data mudou desde o último envio: o PDF muda de pasta junto.
+      // A data ou a pasta mudaram desde o último envio: o PDF muda de pasta junto.
       if (anterior.pastaId && anterior.pastaId !== pastaId) {
         params.set("addParents", pastaId);
         params.set("removeParents", anterior.pastaId);

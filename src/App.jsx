@@ -651,14 +651,24 @@ export default function App() {
             onBaixarCsv={ensaioRows.length ? exportPlanilha : null}
             onExportarJson={exportJSON} onImportarJson={importJSON} />
 
-          {currentExp?.id && isOwnerCurrent && (<section className="bg-white rounded-xl border border-slate-200 p-4">
+          {/* Sempre visível no fim: sem salvar ainda não há experimento para compartilhar,
+              e só o dono (ou admin) concede edição — nos outros casos explica o porquê. */}
+          <section className="bg-white rounded-xl border border-slate-200 p-4">
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Share2 size={13} className="text-blue-700" /> Compartilhar edição</h3>
-            <div className="flex gap-2">
-              <select id="editorSel" className="flex-1 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400"><option value="">Escolher pessoa…</option>{profilesList.filter(p => p.uid !== currentExp.ownerId && !(currentExp.editors || []).includes(p.uid)).map(p => <option key={p.uid} value={p.uid}>{p.name}</option>)}</select>
-              <button onClick={() => { const el = document.getElementById("editorSel"); if (el?.value) { addEditor(el.value); el.value = ""; } }} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 rounded-lg font-medium">Conceder</button>
-            </div>
-            {(currentExp.editors || []).length > 0 && (<div className="flex flex-wrap gap-1.5 mt-2">{currentExp.editors.map(uid => { const p = profilesList.find(x => x.uid === uid); return (<span key={uid} className="flex items-center gap-1 text-xs bg-blue-50 text-blue-800 rounded-full pl-2 pr-1 py-0.5">{p?.name || uid.slice(0, 6)}<button onClick={() => removeEditor(uid)} className="hover:text-rose-500"><X size={12} /></button></span>); })}</div>)}
-          </section>)}
+            {currentExp?.id && isOwnerCurrent ? (
+              <div className="flex gap-2">
+                <select id="editorSel" className="flex-1 min-w-0 px-2 py-1.5 text-sm border border-slate-200 rounded bg-white outline-none focus:border-blue-400"><option value="">Escolher pessoa…</option>{profilesList.filter(p => p.uid !== currentExp.ownerId && !(currentExp.editors || []).includes(p.uid)).map(p => <option key={p.uid} value={p.uid}>{p.name}</option>)}</select>
+                <button onClick={() => { const el = document.getElementById("editorSel"); if (el?.value) { addEditor(el.value); el.value = ""; } }} className="text-sm bg-blue-700 hover:bg-blue-800 text-white px-3 rounded-lg font-medium">Conceder</button>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">
+                {!currentExp?.id
+                  ? <>Salve o experimento para liberar o compartilhamento — pelo botão de envio acima ou em <b>Salvar</b>, no menu.</>
+                  : <>Só o dono do experimento{currentExp.ownerName ? ` (${currentExp.ownerName})` : ""} pode conceder edição a outras pessoas.</>}
+              </p>
+            )}
+            {(currentExp?.editors || []).length > 0 && (<div className="flex flex-wrap gap-1.5 mt-2">{currentExp.editors.map(uid => { const p = profilesList.find(x => x.uid === uid); return (<span key={uid} className="flex items-center gap-1 text-xs bg-blue-50 text-blue-800 rounded-full pl-2 pr-1 py-0.5">{p?.name || uid.slice(0, 6)}{isOwnerCurrent && <button onClick={() => removeEditor(uid)} aria-label={`Remover edição de ${p?.name || "esta pessoa"}`} className="hover:text-rose-500"><X size={12} /></button>}</span>); })}</div>)}
+          </section>
 
         </div>)}
       </main>

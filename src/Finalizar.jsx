@@ -180,6 +180,9 @@ export default function Finalizar({
       const pastas = await cloud.pastasDoEnvio(dataIso, salvo.title, salvo.id);
       setPastaEnviada({ id: pastas.experimentoId, nome: salvo.title });
       marcar("pastas", { estado: "ok", rotulo: `Pastas prontas: ${pastas.nomeData} / ${salvo.title} / Fotos, Logs` });
+      // Falhar aqui não impede o envio: os arquivos sobem e o aviso explica o que faltou.
+      try { await cloud.liberarEdicaoComLink(pastas.experimentoId); }
+      catch (e) { setAviso(`Os arquivos foram enviados, mas não deu para liberar a edição para qualquer pessoa com o link: ${cloud.explicarErroDrive(e)}. Ajuste o compartilhamento da pasta no Drive.`); }
 
       // Daqui em diante uma falha não interrompe o resto: cada parte é independente.
       let falhas = 0;
@@ -286,7 +289,7 @@ export default function Finalizar({
           <div className="flex items-center gap-1.5 whitespace-nowrap pl-15"><Folder size={15} className="text-slate-500 shrink-0" /> Logs <span className="text-slate-400 font-sans text-xs">({totalLogs})</span></div>
         </div>
         <p className="text-xs text-slate-500 mb-3">
-          A pasta do dia vem da data do ensaio, e cada experimento tem a própria pasta dentro dela. Enviar de novo atualiza a folha de campo (o Drive guarda as versões anteriores) e sobe só os arquivos novos.
+          A pasta do dia vem da data do ensaio, e cada experimento tem a própria pasta dentro dela, com edição liberada para qualquer pessoa com o link. Enviar de novo atualiza a folha de campo (o Drive guarda as versões anteriores) e sobe só os arquivos novos.
           Não feche a aba durante o envio: os arquivos saem direto deste navegador.
         </p>
 

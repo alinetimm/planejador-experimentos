@@ -370,6 +370,20 @@ function enviarComProgresso(sessao, file, tipo, onProgress) {
   });
 }
 
+/**
+ * Libera edição para qualquer pessoa com o link na pasta do experimento. Numa
+ * pasta de conta pessoal não existe "todos da organização": é o jeito de todos
+ * os membros abrirem e editarem sem compartilhar pessoa a pessoa. O PDF, Fotos,
+ * Logs e tudo o que estiver dentro herdam a permissão. Repetir é inofensivo.
+ */
+export async function liberarEdicaoComLink(pastaId) {
+  await driveApi(`/files/${pastaId}/permissions`, {
+    metodo: "POST",
+    corpo: { role: "writer", type: "anyone", allowFileDiscovery: false },
+    params: { fields: "id" },
+  });
+}
+
 /** Fotos e vídeos vão para "fotos"; qualquer outro arquivo é log. */
 export const grupoDoAnexo = (att) => att.grupo || (att.kind === "photo" || att.kind === "video" ? "fotos" : "logs");
 

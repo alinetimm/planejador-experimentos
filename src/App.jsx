@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Waves, Gauge, Rocket, ClipboardList, ClipboardCheck, Plus, Trash2, ChevronDown,
   User, LogOut, Save, FolderOpen, RotateCcw, AlertTriangle, X, FileText,
-  DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Copy, CloudUpload,
+  DownloadCloud, FunctionSquare, Pencil, ArrowLeft, LogIn, Users, Share2, Lock, Copy, CloudUpload, Menu,
 } from "lucide-react";
 import * as cloud from "./cloud";
 import { download, toCSV } from "./lib/stats";
@@ -66,6 +66,13 @@ export default function App() {
   const [currentExp, setCurrentExp] = useState(null);
   const [profilesList, setProfilesList] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [menuAberto, setMenuAberto] = useState(false);
+  useEffect(() => {
+    if (!menuAberto) return;
+    const fechar = (e) => { if (e.key === "Escape") setMenuAberto(false); };
+    window.addEventListener("keydown", fechar);
+    return () => window.removeEventListener("keydown", fechar);
+  }, [menuAberto]);
   const [listFilter, setListFilter] = useState("todos");
   const [showSaves, setShowSaves] = useState(false);
   const [showSaveDlg, setShowSaveDlg] = useState(false);
@@ -345,16 +352,43 @@ export default function App() {
     } catch { flash("Não foi possível gerar o PDF"); }
   };
 
-  const userChip = (<span className="flex items-center gap-1.5 bg-white/15 rounded-full pl-1 pr-3 py-1">{currentUser?.photoURL ? <img src={currentUser.photoURL} alt="" className="w-5 h-5 rounded-full" referrerPolicy="no-referrer" /> : <User size={14} />}<span className="max-w-[8rem] truncate">{currentUser?.name}</span>{isAdmin && <span className="text-[9px] font-bold bg-amber-400 text-blue-950 rounded px-1 leading-tight">ADMIN</span>}</span>);
-  const headerActions = (<div className="flex items-center gap-1.5 text-sm flex-wrap">
-    {userChip}
-    <button onClick={onSaveClick} disabled={busy || readOnly} title={readOnly ? "Somente leitura" : "Salvar na nuvem"} className="bg-white/15 hover:bg-white/25 disabled:opacity-50 rounded-lg p-2 flex items-center gap-1.5">{readOnly ? <Lock size={15} /> : <Save size={15} />}<span className="hidden sm:inline">Salvar</span></button>
-    {deferred && <button onClick={installApp} title="Instalar app" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><DownloadCloud size={15} /></button>}
-    <button onClick={() => setShowAnalise(true)} title="Analisar dados (ferramenta opcional)" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><FunctionSquare size={15} /></button>
-    <button onClick={() => setShowSaves(true)} title="Experimentos do time" className="bg-white/15 hover:bg-white/25 rounded-lg p-2 relative"><FolderOpen size={15} />{cloudList.length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-blue-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{cloudList.length}</span>}</button>
-    <button onClick={resetForm} title="Novo rascunho" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><RotateCcw size={15} /></button>
-    <button onClick={switchUser} title="Sair" className="bg-white/15 hover:bg-white/25 rounded-lg p-2"><LogOut size={15} /></button>
-  </div>);
+  const avatar = (tamanho) => currentUser?.photoURL
+    ? <img src={currentUser.photoURL} alt="" className={`${tamanho} rounded-full shrink-0 object-cover`} referrerPolicy="no-referrer" />
+    : <span className={`${tamanho} rounded-full shrink-0 bg-blue-100 text-blue-800 flex items-center justify-center`}><User size={16} /></span>;
+  const itemMenu = (Icone, rotulo, onClick, { disabled = false, extra = null, perigo = false } = {}) => (
+    <button onClick={() => { setMenuAberto(false); onClick(); }} disabled={disabled}
+      className={`w-full flex items-center gap-3 px-5 py-3 text-sm text-left transition disabled:opacity-50 ${perigo ? "text-rose-700 hover:bg-rose-50" : "text-slate-700 hover:bg-slate-50"}`}>
+      <Icone size={17} className={perigo ? "text-rose-600 shrink-0" : "text-blue-700 shrink-0"} />
+      <span className="flex-1">{rotulo}</span>
+      {extra}
+    </button>
+  );
+  const menuUsuario = menuAberto && (
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Menu do usuário">
+      <div className="absolute inset-0 bg-black/40" onClick={() => setMenuAberto(false)} />
+      <aside className="absolute right-0 top-0 h-full w-72 max-w-[85vw] bg-white shadow-2xl flex flex-col">
+        <div className="bg-gradient-to-r from-[#12185a] via-[#1e1b78] to-[#3a3ad8] text-white px-5 pt-5 pb-4" style={{ paddingTop: "calc(1.25rem + env(safe-area-inset-top, 0px))" }}>
+          <div className="flex items-start justify-between gap-2">
+            {avatar("w-12 h-12 ring-2 ring-white/40")}
+            <button onClick={() => setMenuAberto(false)} aria-label="Fechar menu" className="text-white/70 hover:text-white p-1 -mr-1"><X size={20} /></button>
+          </div>
+          <div className="mt-3 font-semibold truncate">{currentUser?.name}</div>
+          {currentUser?.email && <div className="text-xs text-blue-100 truncate">{currentUser.email}</div>}
+          {isAdmin && <span className="inline-block mt-2 text-[10px] font-bold bg-amber-400 text-blue-950 rounded px-1.5 py-0.5">ADMIN</span>}
+        </div>
+        <nav className="flex-1 overflow-y-auto py-2">
+          {itemMenu(readOnly ? Lock : Save, readOnly ? "Somente leitura" : "Salvar", onSaveClick, { disabled: busy || readOnly })}
+          {itemMenu(FolderOpen, "Experimentos do time", () => setShowSaves(true), { extra: cloudList.length > 0 && <span className="bg-amber-400 text-blue-950 text-[11px] font-bold rounded-full min-w-5 h-5 px-1.5 flex items-center justify-center">{cloudList.length}</span> })}
+          {itemMenu(FunctionSquare, "Analisar dados", () => setShowAnalise(true))}
+          {itemMenu(RotateCcw, "Novo rascunho", resetForm)}
+          {deferred && itemMenu(DownloadCloud, "Instalar app", installApp)}
+        </nav>
+        <div className="border-t border-slate-100 py-2" style={{ paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom, 0px))" }}>
+          {itemMenu(LogOut, "Sair", switchUser, { perigo: true })}
+        </div>
+      </aside>
+    </div>
+  );
 
   if (showAnalise) return <AnalisarDados onClose={() => setShowAnalise(false)} dadosIniciais={ensaioItems.length && ensaioRows.length ? { headers: ensaioItems.map(i => i.titulo), rows: ensaioRows.map(r => Object.fromEntries(ensaioItems.map(i => [i.titulo, r[i.id] ?? ""]))) } : null} />;
 
@@ -372,22 +406,31 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800" style={{ fontFamily: "ui-sans-serif, system-ui, sans-serif" }}>
-      <header className="bg-gradient-to-r from-slate-900 via-blue-900 to-blue-800 text-white">
-        <div className="max-w-6xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-            <div className="flex items-center gap-3"><img src="/hydrone-mark.png" alt="Hydrone" className="h-9 w-9 shrink-0" /><div><h1 className="text-lg font-bold leading-tight">Planejador de Experimentos</h1><p className="text-xs text-blue-100">Hydrone · montador de protocolo</p></div></div>
-            {headerActions}
-          </div>
-          <nav className="flex gap-1 flex-wrap">
-            <button onClick={() => setStep(1)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 1 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 1 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>1</span><ClipboardList size={16} /><span>Sobre</span></button>
-            <button onClick={() => setStep(2)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 2 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 2 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>2</span><ClipboardCheck size={16} /><span>Experimento</span></button>
-            <button onClick={() => setStep(3)} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${step === 3 ? "bg-white text-blue-800 shadow" : "text-blue-50 hover:bg-blue-600/40"}`}><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${step === 3 ? "bg-blue-700 text-white" : "bg-blue-600/50 text-white"}`}>3</span><CloudUpload size={16} /><span>Finalizar e enviar pro drive</span></button>
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800" style={{ fontFamily: "ui-sans-serif, system-ui, sans-serif" }}>
+      <header className="bg-gradient-to-r from-[#12185a] via-[#1e1b78] to-[#3a3ad8] text-white">
+        {/* Grade: no celular as etapas ganham a linha inteira embaixo; a partir de sm,
+            ficam sob o título, com logo e menu ocupando as duas linhas. */}
+        <div className="max-w-6xl mx-auto px-4 py-3 grid grid-cols-[auto_1fr_auto] items-center gap-x-3 sm:gap-x-4 gap-y-2">
+          <img src="/hydrone-mark.png" alt="Hydrone" className="sm:row-span-2 h-14 w-14 sm:h-20 sm:w-20 shrink-0 -my-1 drop-shadow" />
+          <h1 className="min-w-0 font-titulo text-xl sm:text-3xl leading-tight">Planejador de Experimentos Hydrone</h1>
+          <button onClick={() => setMenuAberto(true)} aria-label="Abrir menu do usuário" aria-expanded={menuAberto}
+            className="sm:row-span-2 justify-self-end shrink-0 flex items-center gap-2 bg-white/10 hover:bg-white/20 rounded-full pl-1 pr-3 py-1 transition relative">
+            {avatar("w-8 h-8")}
+            <Menu size={20} />
+            {cloudList.length > 0 && <span className="absolute -top-1 -right-1 bg-amber-400 text-blue-950 text-[10px] font-bold rounded-full min-w-4 h-4 px-1 flex items-center justify-center">{cloudList.length}</span>}
+          </button>
+          <nav aria-label="Etapas" className="col-span-3 sm:col-span-1 sm:col-start-2 flex flex-wrap gap-2">
+            {[[1, "Sobre"], [2, "Experimento"], [3, "Finalizar e enviar para o drive"]].map(([n, rotulo]) => (
+              <button key={n} onClick={() => setStep(n)} aria-current={step === n ? "step" : undefined}
+                className={`font-titulo whitespace-nowrap text-sm sm:text-lg leading-none px-4 sm:px-6 py-1.5 rounded-full transition shadow-sm ${step === n ? "bg-red-600 text-white" : "bg-white text-slate-900 hover:bg-sky-100"}`}>
+                {rotulo}
+              </button>
+            ))}
           </nav>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-6">
+      <main className="w-full flex-1 max-w-6xl mx-auto px-4 py-6">
         {readOnly && (<div className="mb-4 flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-sm"><Lock size={15} className="shrink-0" /> Somente leitura — você não é dono nem editor deste experimento. As alterações não serão salvas.</div>)}
 
         {/* ETAPA 1 — SOBRE: configuração do ensaio e montagem do checklist */}
@@ -619,6 +662,14 @@ export default function App() {
 
         </div>)}
       </main>
+
+      <footer className="bg-gradient-to-r from-[#12185a] via-[#1e1b78] to-[#3a3ad8] text-white/75">
+        <p className="max-w-6xl mx-auto px-4 py-1.5 font-titulo text-[11px] sm:text-xs">
+          Projeto Hydrone · Sistema de Planejamento e Ensaios de Campo <span className="hidden sm:inline">|</span><br className="sm:hidden" /> Desenvolvido por Aline Timm
+        </p>
+      </footer>
+
+      {menuUsuario}
 
       {/* Modal: editar/adicionar requisito */}
       {itemDraft && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setItemDraft(null)}><div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-5 max-h-[88vh] overflow-auto" onClick={e => e.stopPropagation()}>

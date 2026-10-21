@@ -1,1 +1,6 @@
 @import "tailwindcss";
+
+/* Fonte dos títulos do cabeçalho e do rodapé. Sem rede, cai na fonte do sistema. */
+@theme {
+  --font-titulo: "Contrail One", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+}
